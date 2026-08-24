@@ -10,7 +10,7 @@ import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjec
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import { decodeState, encodeState, validateState } from './share';
-import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, transitRouteLabel, transitRoutes, validStations } from './transit';
+import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, shouldDisplayStationZone, transitRouteLabel, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
 
 const base = (kind: Constraint['kind']): Constraint => ({
@@ -39,6 +39,12 @@ describe('SF normalization', () => {
     expect(pois.filter((poi) => poi.category === 'library')).toHaveLength(29);
     expect(validStations).toHaveLength(193);
   });
+});
+
+it('shows hiding-zone radii only for eligible stations', () => {
+  expect(shouldDisplayStationZone(true, true)).toBe(true);
+  expect(shouldDisplayStationZone(true, false)).toBe(false);
+  expect(shouldDisplayStationZone(false, true)).toBe(false);
 });
 
 describe.each(['radar', 'thermometer', 'measuring', 'coastline', 'direction', 'closer', 'farther', 'intersection', 'exclusion'] as const)(

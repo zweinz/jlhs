@@ -45,6 +45,7 @@ import {
   primaryTransitRoutes,
   primaryTransitStationIds,
   routesForStation,
+  shouldDisplayStationZone,
   transitProvenance,
   transitRouteGeoJson,
   transitModeLabel,
@@ -455,7 +456,7 @@ export default function App() {
         properties: { kind: 'station', id: station.id, status: stationStatus ?? '', eligible },
         geometry: { type: 'Point', coordinates: [station.lng, station.lat] },
       });
-      if (state.layers['station-zones']) {
+      if (shouldDisplayStationZone(state.layers['station-zones'], eligible)) {
         data.addGeoJson({
           ...turf.circle([station.lng, station.lat], state.stationZoneMiles, { units: 'miles', steps: 24 }),
           properties: { kind: 'station-zone', id: station.id, status: stationStatus ?? '', eligible },

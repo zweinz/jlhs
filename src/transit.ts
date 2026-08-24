@@ -103,6 +103,10 @@ export function eligibleStationIds(
     .map((station) => station.id);
 }
 
+export function shouldDisplayStationZone(layerEnabled: boolean, eligible: boolean) {
+  return layerEnabled && eligible;
+}
+
 export function nearestCoastlineDistance(position: Position) {
   const nearest = turf.nearestPointOnLine(coastline, turf.point([position.lng, position.lat]), { units: 'miles' });
   return Number(nearest.properties.dist);
