@@ -55,7 +55,6 @@ export function validateState(value: unknown): SharedState {
     !Number.isFinite(state.stationZoneMiles) ||
     state.stationZoneMiles < 0.05 ||
     state.stationZoneMiles > 5 ||
-    typeof state.constrainToStationZones !== 'boolean' ||
     !state.stationStatuses ||
     !state.routeStatuses
   ) {
@@ -106,7 +105,6 @@ function migrate(value: unknown) {
     version: 2,
     mode: 'seeker',
     stationZoneMiles: 0.25,
-    constrainToStationZones: false,
     stationStatuses: {},
     routeStatuses: {},
   };

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
-import { combineConstraints, nearestPoi, partition, stationZoneArea } from './geometry';
+import { combineConstraints, nearestPoi, partition, stationIdsOverlappingArea } from './geometry';
 import {
   CATEGORY_LABELS,
   PARTITION_CATEGORIES,
@@ -59,7 +59,6 @@ const REGION_CATEGORIES: PoiCategory[] = [
 ];
 const initialLayers = {
   ...Object.fromEntries(VISIBLE_POI_PARTITIONS.map((category) => [category, category === 'museum'])),
-  'valid-station-partition': false,
   'station-zones': true,
   'transit-routes': true,
   coastline: false,
@@ -74,7 +73,6 @@ const initial: SharedState = {
   viewport: { center: SF_CENTER, zoom: 12 },
   mode: 'seeker',
   stationZoneMiles: 0.25,
-  constrainToStationZones: false,
   stationStatuses: {},
   routeStatuses: {},
 };
@@ -260,20 +258,17 @@ export default function App() {
     [],
   ) as Record<PoiCategory, ReturnType<typeof partition>>;
   const regions = useMemo(() => Object.assign({}, ...Object.values(partitions)), [partitions]);
-  const eligibleIds = useMemo(
+  const statusEligibleIds = useMemo(
     () => eligibleStationIds(state.stationStatuses, state.routeStatuses),
     [state.routeStatuses, state.stationStatuses],
   );
-  const stationArea = useMemo(
-    () =>
-      state.constrainToStationZones
-        ? stationZoneArea(eligibleIds, state.stationZoneMiles)
-        : undefined,
-    [eligibleIds, state.constrainToStationZones, state.stationZoneMiles],
-  );
   const feasible = useMemo(
-    () => combineConstraints(state.constraints, regions, stationArea),
-    [regions, state.constraints, stationArea],
+    () => combineConstraints(state.constraints, regions),
+    [regions, state.constraints],
+  );
+  const eligibleIds = useMemo(
+    () => stationIdsOverlappingArea(statusEligibleIds, state.stationZoneMiles, feasible),
+    [feasible, state.stationZoneMiles, statusEligibleIds],
   );
   const traceDistanceMiles = useMemo(
     () => pathDistanceMiles(tracePoints),
@@ -360,11 +355,6 @@ export default function App() {
         properties: { ...feature.properties, kind: 'geographic-region', color: partitionColor(index, collection.features.length, offset), areaName: feature.properties.name },
       }));
     });
-    if (state.layers['valid-station-partition']) {
-      Object.entries(partitions['game-valid-station']).forEach(([id, feature], index) => {
-        data.addGeoJson({ ...feature, properties: { kind: 'station-region', color: colors[index % colors.length], id } });
-      });
-    }
     if (state.layers.coastline) {
       data.addGeoJson({ ...coastline, properties: { kind: 'coastline' } });
     }
@@ -446,7 +436,7 @@ export default function App() {
       }
       const colorValue = feature.getProperty('color');
       const regionColor = typeof colorValue === 'string' ? colorValue : '#553c9a';
-      return { fillColor: regionColor, fillOpacity: kind === 'station-region' ? 0.08 : kind === 'geographic-region' ? 0.07 : 0.12, strokeColor: regionColor, strokeWeight: kind === 'geographic-region' ? 2 : 1 };
+      return { fillColor: regionColor, fillOpacity: kind === 'geographic-region' ? 0.07 : 0.12, strokeColor: regionColor, strokeWeight: kind === 'geographic-region' ? 2 : 1 };
     });
     data.addListener('click', (event: google.maps.Data.MouseEvent) => {
       if (traceActive && event.latLng) {
@@ -597,16 +587,14 @@ export default function App() {
           <details className="panel" open>
             <summary>Transit and map layers</summary>
             <div className="toggle-grid">
-              <label className="toggle"><input type="checkbox" checked={!!state.layers['valid-station-partition']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'valid-station-partition': event.target.checked } }))} />Valid-station partition</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers['station-zones']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'station-zones': event.target.checked } }))} />Hiding-zone radii</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers['transit-routes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'transit-routes': event.target.checked } }))} />Light rail + Rapid Muni</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers.coastline} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, coastline: event.target.checked } }))} />Coastline</label>
             </div>
             <div className="inline-controls">
               <label>Hiding-zone radius (miles)<input type="number" min="0.05" max="5" step="0.05" value={state.stationZoneMiles} onChange={(event) => setState((current) => ({ ...current, stationZoneMiles: Math.max(0.05, Number(event.target.value) || 0.25) }))} /></label>
-              <label className="toggle constrain"><input type="checkbox" checked={state.constrainToStationZones} onChange={(event) => setState((current) => ({ ...current, constrainToStationZones: event.target.checked }))} />Constrain feasible area to eligible zones</label>
             </div>
-            <p className="helper">{eligibleIds.length} of {validStations.length} valid stations currently eligible. Route cuts remove stations within 0.1 mile of that official route geometry.</p>
+            <p className="helper">{eligibleIds.length} of {validStations.length} valid stations currently possible. A station turns off when its hiding-radius zone no longer overlaps the green feasible area; explicit station and route cuts also apply.</p>
           </details>
 
           <details className="panel">

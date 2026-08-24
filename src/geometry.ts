@@ -245,6 +245,18 @@ export function stationZoneArea(stationIds: string[], radiusMiles: number) {
   );
 }
 
+export function stationIdsOverlappingArea(stationIds: string[], radiusMiles: number, area: Area) {
+  if (area.geometry.coordinates.length === 0) return [];
+  const selected = new Set(stationIds);
+  return validStations
+    .filter((station) => selected.has(station.id))
+    .filter((station) => turf.booleanIntersects(
+      turf.circle(point(station), radiusMiles, { units: 'miles', steps: 24 }),
+      area,
+    ))
+    .map((station) => station.id);
+}
+
 export function positionInArea(position: Position, area: Area) {
   return turf.booleanPointInPolygon(point(position), area as Feature<Polygon>);
 }

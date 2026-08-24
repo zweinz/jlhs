@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as turf from '@turf/turf';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
-import { combineConstraints, constraintArea, partition, stationZoneArea } from './geometry';
+import { combineConstraints, constraintArea, partition, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer } from './hider';
 import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
@@ -202,9 +202,20 @@ describe('transit layers and cuts', () => {
   it('contains current light-rail and Rapid Muni routes', () => {
     expect(transitRoutes.map((route) => route.id)).toEqual(expect.arrayContaining(['F', 'J', 'K', 'L', 'M', 'N', 'T', '5R', '9R', '14R', '28R', '38R']));
   });
-  it('generates a valid-station partition and configurable zone geometry', () => {
+  it('generates valid-station regions and configurable zone geometry', () => {
     expect(Object.keys(partition('game-valid-station'))).toHaveLength(193);
     expect(turf.area(stationZoneArea([validStations[0].id], 0.25))).toBeGreaterThan(0);
+  });
+  it('turns off stations whose hiding zones do not overlap the feasible area', () => {
+    const nearby = validStations[0];
+    const faraway = validStations.reduce((furthest, station) =>
+      turf.distance([nearby.lng, nearby.lat], [station.lng, station.lat], { units: 'miles' }) >
+      turf.distance([nearby.lng, nearby.lat], [furthest.lng, furthest.lat], { units: 'miles' }) ? station : furthest,
+    );
+    const feasible = turf.circle([nearby.lng, nearby.lat], 0.05, { units: 'miles' });
+    const overlapping = stationIdsOverlappingArea([nearby.id, faraway.id], 0.25, feasible);
+    expect(overlapping).toContain(nearby.id);
+    expect(overlapping).not.toContain(faraway.id);
   });
   it('cuts explicit stations and whole routes', () => {
     const station = validStations.find((candidate) => eligibleStationIds({}, { J: 'in' }).includes(candidate.id));
@@ -236,7 +247,6 @@ const state: SharedState = {
   viewport: { center: { lat: 37.77, lng: -122.44 }, zoom: 12 },
   mode: 'seeker',
   stationZoneMiles: 0.25,
-  constrainToStationZones: false,
   stationStatuses: {},
   routeStatuses: {},
 };

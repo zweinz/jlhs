@@ -42,7 +42,6 @@ export interface SharedState {
   hiderPosition?: Position;
   hiderMapUrl?: string;
   stationZoneMiles: number;
-  constrainToStationZones: boolean;
   stationStatuses: Record<string, Eligibility>;
   routeStatuses: Record<string, Eligibility>;
 }
