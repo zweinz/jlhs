@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as turf from '@turf/turf';
+import { setAllConstraintsEnabled, stationStatusesForAll } from './bulkActions';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { combineConstraints, constraintArea, excludedArea, partition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
@@ -252,6 +253,12 @@ it('shows card-specific photo notes before general photo notes', () => {
   const cardNote = PHOTO_SUBJECTS[0].notes[0];
   expect(orderedRuleNotes('photo-reference', QUESTION_DEFINITIONS['photo-reference'].notes, [cardNote])[0]).toBe(cardNote);
   expect(orderedRuleNotes('matching-region', ['general'], ['subject'])).toEqual(['general', 'subject']);
+});
+
+it('applies bulk station and question state changes', () => {
+  expect(stationStatusesForAll(['a', 'b'], 'out')).toEqual({ a: 'out', b: 'out' });
+  expect(stationStatusesForAll(['a', 'b'], '')).toEqual({});
+  expect(setAllConstraintsEnabled([base('radar'), { ...base('measuring'), id: 'y' }], false).every((constraint) => !constraint.enabled)).toBe(true);
 });
 
 it('keeps POI partition layers mutually exclusive and allows all of them to be off', () => {

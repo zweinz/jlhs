@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
+import { setAllConstraintsEnabled, stationStatusesForAll } from './bulkActions';
 import { combineConstraints, excludedArea, nearestPoi, partition, stationIdsOverlappingArea } from './geometry';
 import {
   CATEGORY_LABELS,
@@ -568,6 +569,18 @@ export default function App() {
       return { ...current, [key]: statuses };
     });
 
+  const setAllStationEligibility = (value: Eligibility | '') =>
+    setState((current) => ({
+      ...current,
+      stationStatuses: stationStatusesForAll(validStations.map((station) => station.id), value),
+    }));
+
+  const setEveryQuestionEnabled = (enabled: boolean) =>
+    setState((current) => ({
+      ...current,
+      constraints: setAllConstraintsEnabled(current.constraints, enabled),
+    }));
+
   const fitTrace = () => {
     if (!mapRef.current || tracePoints.length === 0) return;
     const bounds = new google.maps.LatLngBounds();
@@ -690,6 +703,13 @@ export default function App() {
 
           <details className="panel">
             <summary>Mark stations in / out</summary>
+            <h3>All valid stations</h3>
+            <div className="three-buttons" role="group" aria-label="Mark all valid stations">
+              <button type="button" className="keep" onClick={() => setAllStationEligibility('in')}>Keep all in</button>
+              <button type="button" className="danger" onClick={() => setAllStationEligibility('out')}>Cut all out</button>
+              <button type="button" className="secondary" onClick={() => setAllStationEligibility('')}>Clear all</button>
+            </div>
+            <h3>One valid station</h3>
             <label className="stacked">Valid station<select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value)}>{validStations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
             {selectedStation && <p className="helper">Lines nearby: {routesForStation(selectedStation).join(', ') || 'no Rapid/light-rail line match'}</p>}
             <div className="three-buttons">
@@ -714,6 +734,10 @@ export default function App() {
 
           <section className="questions">
             <div className="section-heading"><h2>Questions</h2></div>
+            <div className="two-buttons bulk-question-buttons" role="group" aria-label="Enable or disable all questions">
+              <button type="button" className="secondary" disabled={state.constraints.length === 0 || state.constraints.every((constraint) => constraint.enabled)} onClick={() => setEveryQuestionEnabled(true)}>Enable all</button>
+              <button type="button" className="secondary" disabled={state.constraints.length === 0 || state.constraints.every((constraint) => !constraint.enabled)} onClick={() => setEveryQuestionEnabled(false)}>Disable all</button>
+            </div>
             <div className="add"><select id="kind" aria-label="Question type">{PRIMARY_QUESTION_KINDS.map((kind) => <option key={kind} value={kind}>{QUESTION_DEFINITIONS[kind].label}</option>)}</select><button onClick={add}>Add</button></div>
             {state.constraints.length === 0 && <p className="empty-state">Add a question, then paste the Google Maps links the players shared.</p>}
             {state.constraints.map((constraint) => {

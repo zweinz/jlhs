@@ -176,6 +176,10 @@ article {
 .inline-controls .constrain { color: #17202a; font-size: .85rem; }
 .three-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .4rem; margin-top: .55rem; }
 .three-buttons button { padding-inline: .35rem; }
+.two-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.bulk-question-buttons { margin: .15rem 0 .65rem; }
+.bulk-question-buttons button { min-height: 38px; padding: .4rem .55rem; }
+.panel h3 + .three-buttons { margin-bottom: .9rem; }
 .keep { background: #166534; }
 .route-list { display: grid; gap: .35rem; }
 .route-list label { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: .5rem; align-items: center; }
