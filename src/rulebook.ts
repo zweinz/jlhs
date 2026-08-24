@@ -26,6 +26,7 @@ export const MATCHING_SUBJECTS: RulebookSubject[] = [
   excluded('admin-2', '2nd administrative division', 'Not in the SF deck.'),
   excluded('admin-3', '3rd administrative division', 'Not in the SF deck.'),
   { id: 'supervisor-district', label: '4th administrative division', status: 'in-play', support: 'exact', notes: ['For SF, this means current Supervisorial Districts D1–D11.'] },
+  { id: 'zip-code', label: '5th administrative division: ZIP code (homebrew)', status: 'experimental', support: 'exact', notes: ['Requested SF homebrew: match the generalized ZIP-code area containing each player.', 'ZIP codes are USPS delivery-route identifiers rather than formal administrative divisions; DataSF’s polygons are generalized areal representations.'] },
   { id: 'mountain', label: 'Mountain', status: 'in-play', support: 'exact', notes: ['Uses the SF-modified list of 16 hills at least 400 feet high.'] },
   { id: 'landmass', label: 'Landmass', status: 'in-play', support: 'exact', notes: ['A landmass is a contiguous piece of land not broken by a waterway.', 'For this SF deck the three answers are Treasure Island, Strawberry Hill, and everything else in San Francisco.'] },
   { id: 'dog-park', label: 'Park (dog park)', status: 'in-play', support: 'exact', notes: ['SF replaces “park” with the spreadsheet-defined dog parks.'] },

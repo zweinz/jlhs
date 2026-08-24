@@ -11,6 +11,7 @@ import {
   normalizedStationNameLength,
   streetArea,
   waterDistanceArea,
+  zipCodeAt,
 } from './rulebookGeometry';
 
 const frame = () =>
@@ -177,6 +178,10 @@ export function constraintArea(constraint: Constraint, regions: Record<string, A
     if (constraint.category === 'landmass') {
       const landmass = landmassAt(constraint.origin);
       return landmass ? matchingAnswer(landmass as Area) : empty();
+    }
+    if (constraint.category === 'zip-code') {
+      const zipCode = zipCodeAt(constraint.origin);
+      return zipCode ? matchingAnswer(zipCode as Area) : empty();
     }
     const regionId = constraint.regionId ?? nearestPoi(constraint.category ?? 'museum', constraint.origin)?.id;
     const region = regions[regionId ?? ''];

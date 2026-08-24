@@ -1,10 +1,14 @@
 import fs from 'node:fs';
 import * as turf from '@turf/turf';
 
+// Inputs are downloaded public DataSF GeoJSON snapshots in /private/tmp. ZIP boundaries come from:
+// https://data.sfgov.org/resource/uq3t-6t53.geojson?$limit=500
+
 const routesSource = JSON.parse(fs.readFileSync('/private/tmp/muni-simple-routes.geojson', 'utf8'));
 const shorelineSource = JSON.parse(fs.readFileSync('/private/tmp/sf-shoreline.geojson', 'utf8'));
 const districtsSource = JSON.parse(fs.readFileSync('/private/tmp/sf-districts.geojson', 'utf8'));
 const waterSource = JSON.parse(fs.readFileSync('/private/tmp/sf-water.geojson', 'utf8'));
+const zipSource = JSON.parse(fs.readFileSync('/private/tmp/sf-zipcodes.geojson', 'utf8'));
 
 const railLines = new Set(['F', 'J', 'K', 'L', 'M', 'N', 'T']);
 const routeFeatures = routesSource.features
@@ -61,6 +65,19 @@ const waters = waterSource.features.map((feature) => ({
     type: feature.properties.body_type,
   },
 }));
+
+const zipGroups = new Map();
+for (const feature of zipSource.features) {
+  const zipCode = feature.properties.zip_code;
+  zipGroups.set(zipCode, [...(zipGroups.get(zipCode) ?? []), feature]);
+}
+const zipCodes = [...zipGroups.entries()].map(([zipCode, features]) => {
+  const merged = features.length === 1 ? features[0] : turf.union(turf.featureCollection(features));
+  return {
+    ...turf.simplify(merged, { tolerance: 0.000045, highQuality: true }),
+    properties: { id: `zip-${zipCode}`, name: zipCode },
+  };
+});
 
 const treasureIsland = flattened
   .filter((feature) => {
@@ -119,6 +136,13 @@ fs.writeFileSync(
         retrieved: '2026-08-24',
         license: 'Open Data Commons Public Domain Dedication and License',
       },
+      zipCodes: {
+        dataset: 'San Francisco ZIP Codes',
+        sourceUrl: 'https://data.sfgov.org/dataset/San-Francisco-ZIP-Codes/uq3t-6t53',
+        retrieved: '2026-08-24',
+        license: 'Open Data Commons Public Domain Dedication and License',
+        note: 'Generalized areal representations of USPS delivery routes; split records merged by ZIP code',
+      },
       landmasses: {
         source: 'SF Shoreline and Islands plus the Stow Lake island ring',
         note: 'SF-modified landmasses: Treasure Island, Strawberry Hill, and everything else',
@@ -126,6 +150,7 @@ fs.writeFileSync(
     },
     districts: { type: 'FeatureCollection', features: districts },
     waters: { type: 'FeatureCollection', features: waters },
+    zipCodes: { type: 'FeatureCollection', features: zipCodes },
     landmasses: { type: 'FeatureCollection', features: landmasses },
   })}\n`,
 );

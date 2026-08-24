@@ -106,6 +106,11 @@ aside {
 .empty-state { margin: .75rem 0 0; color: #586573; }
 .helper { margin: .4rem 0; color: #586573; font-size: .8rem; }
 .success-line { margin-top: .55rem; color: #166534; font-size: .82rem; font-weight: 750; }
+.trace-tool { margin-top: .85rem; padding-top: .65rem; border-top: 1px solid #d8dee5; }
+.trace-tool h3 { margin-top: 0; }
+.trace-stats { margin: .55rem 0; padding: .45rem .55rem; border-radius: .45rem; background: #fff1f2; color: #9f1239; font-size: .84rem; }
+.trace-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+.trace-buttons button:last-child { grid-column: 1 / -1; }
 .full { width: 100%; margin-top: .55rem; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .compact-toggle { display: flex; align-items: center; gap: .3rem; font-size: .76rem; color: #586573; }
@@ -188,6 +193,23 @@ article {
   text-align: center;
 }
 .notice.error { color: #8b1111; }
+.trace-map-controls {
+  position: absolute;
+  z-index: 3;
+  top: .65rem;
+  left: .65rem;
+  right: .65rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: .35rem;
+  align-items: center;
+  padding: .45rem;
+  border-radius: .65rem;
+  background: #fffffff2;
+  box-shadow: 0 2px 12px #0003;
+}
+.trace-map-controls span { padding-left: .3rem; color: #9f1239; font-size: .78rem; font-weight: 800; }
+.trace-map-controls button { min-height: 38px; padding: .35rem .55rem; }
 .attribution {
   position: absolute;
   bottom: 0;

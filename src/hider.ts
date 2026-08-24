@@ -10,6 +10,7 @@ import {
   nearestStreet,
   nearestWaterDistance,
   normalizedStationNameLength,
+  zipCodeAt,
 } from './rulebookGeometry';
 
 const point = (position: Position) => turf.point([position.lng, position.lat]);
@@ -75,6 +76,11 @@ export function hiderAnswer(constraint: Constraint, hider: Position, regions: Re
       const seekerLandmass = landmassAt(constraint.origin)?.properties.name;
       const hiderLandmass = landmassAt(hider)?.properties.name;
       return seekerLandmass === hiderLandmass ? `Yes — ${hiderLandmass}` : `No — seeker: ${seekerLandmass ?? 'outside'}; hider: ${hiderLandmass ?? 'outside'}`;
+    }
+    if (category === 'zip-code') {
+      const seekerZip = zipCodeAt(constraint.origin)?.properties.name;
+      const hiderZip = zipCodeAt(hider)?.properties.name;
+      return seekerZip === hiderZip ? `Yes — ${hiderZip}` : `No — seeker: ${seekerZip ?? 'outside'}; hider: ${hiderZip ?? 'outside'}`;
     }
     const seekerNearest = nearestPoi(category, constraint.origin);
     const hiderNearest = nearestPoi(category, hider);

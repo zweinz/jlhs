@@ -17,6 +17,7 @@ export const streetProvenance = streetData.provenance;
 export const supervisorDistricts = areasData.districts as FeatureCollection<Polygon | MultiPolygon, NamedArea['properties']>;
 export const waterBodies = areasData.waters as FeatureCollection<Polygon | MultiPolygon, NamedArea['properties'] & { type?: string }>;
 export const sfLandmasses = areasData.landmasses as FeatureCollection<Polygon | MultiPolygon, NamedArea['properties']>;
+export const zipCodeAreas = areasData.zipCodes as FeatureCollection<Polygon | MultiPolygon, NamedArea['properties']>;
 
 const point = (position: Position) => turf.point([position.lng, position.lat]);
 const empty = (): Area => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [] } });
@@ -82,6 +83,10 @@ export function districtAt(position: Position) {
 
 export function landmassAt(position: Position) {
   return containingArea(sfLandmasses, position);
+}
+
+export function zipCodeAt(position: Position) {
+  return containingArea(zipCodeAreas, position);
 }
 
 function distanceToPolygon(position: Position, feature: Feature<Polygon | MultiPolygon>) {

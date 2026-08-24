@@ -5,7 +5,8 @@ import { combineConstraints, constraintArea, partition, stationZoneArea } from '
 import { hiderAnswer } from './hider';
 import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
-import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance } from './rulebookGeometry';
+import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
+import { pathDistanceMiles, pathGeoJson } from './trace';
 import { decodeState, encodeState, validateState } from './share';
 import { eligibleStationIds, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
@@ -112,6 +113,15 @@ describe('missing measuring and matching geometry', () => {
     expect(landmassAt(base('radar').origin)?.properties.name).toBeTruthy();
   });
 
+  it('models the requested ZIP-code matching level with complete merged regions', () => {
+    expect(zipCodeAreas.features).toHaveLength(27);
+    expect(new Set(zipCodeAreas.features.map((feature) => feature.properties.name)).size).toBe(27);
+    const constraint = { ...base('matching-region'), category: 'zip-code' };
+    expect(turf.area(constraintArea(constraint))).toBeGreaterThan(0);
+    expect(zipCodeAt(constraint.origin)?.properties.name).toMatch(/^941/);
+    expect(hiderAnswer(constraint, { lat: 37.76, lng: -122.45 }, {})).toMatch(/Yes|No/);
+  });
+
   it('answers the added subjects in hider mode', () => {
     const hider = { lat: 37.76, lng: -122.45 };
     expect(hiderAnswer({ ...base('measuring'), category: 'sea-level' }, hider, {})).toMatch(/Closer|Farther/);
@@ -119,6 +129,30 @@ describe('missing measuring and matching geometry', () => {
     expect(hiderAnswer({ ...base('matching-region'), category: 'street-path' }, hider, {})).toMatch(/Yes|No/);
     expect(hiderAnswer({ ...base('matching-region'), category: 'supervisor-district' }, hider, {})).toMatch(/Yes|No/);
   });
+});
+
+describe('hider path tracing', () => {
+  const points = [
+    { lat: 37.77, lng: -122.44 },
+    { lat: 37.771, lng: -122.44 },
+    { lat: 37.771, lng: -122.439 },
+  ];
+  it('measures the full multi-segment path', () => {
+    expect(pathDistanceMiles(points)).toBeGreaterThan(0.1);
+    expect(pathDistanceMiles(points)).toBeLessThan(0.2);
+    expect(pathDistanceMiles(points.slice(0, 1))).toBe(0);
+  });
+  it('creates a line only after two trace points', () => {
+    expect(pathGeoJson(points.slice(0, 1))).toBeUndefined();
+    expect(pathGeoJson(points)?.geometry.coordinates).toHaveLength(3);
+  });
+});
+
+it('administrative partitions cover every valid hiding station', () => {
+  expect(supervisorDistricts.features).toHaveLength(11);
+  expect(validStations.every((station) => districtAt(station))).toBe(true);
+  expect(validStations.every((station) => zipCodeAt(station))).toBe(true);
+  expect(validStations.every((station) => landmassAt(station))).toBe(true);
 });
 
 it('models named and not-within-reach tentacle answers', () => {

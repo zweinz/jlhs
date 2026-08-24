@@ -28,7 +28,11 @@ import {
   nearestStreet,
   normalizedStationNameLength,
   rulebookAreaProvenance,
+  sfLandmasses,
   streetProvenance,
+  supervisorDistricts,
+  zipCodeAreas,
+  zipCodeAt,
 } from './rulebookGeometry';
 import { decodeState, encodeState } from './share';
 import {
@@ -43,9 +47,10 @@ import {
   validStations,
 } from './transit';
 import type { Constraint, Eligibility, Position, QuestionKind, SharedState } from './types';
+import { pathDistanceMiles, pathGeoJson } from './trace';
 import './style.css';
 
-const SPECIAL_LAYERS = ['valid-station-partition', 'station-zones', 'transit-routes', 'coastline'] as const;
+const VISIBLE_POI_PARTITIONS: PoiCategory[] = [...PARTITION_CATEGORIES, 'rail-station', 'aquarium'];
 const REGION_CATEGORIES: PoiCategory[] = [
   ...PARTITION_CATEGORIES,
   'game-valid-station',
@@ -53,11 +58,14 @@ const REGION_CATEGORIES: PoiCategory[] = [
   'aquarium',
 ];
 const initialLayers = {
-  ...Object.fromEntries(PARTITION_CATEGORIES.map((category) => [category, category === 'museum'])),
+  ...Object.fromEntries(VISIBLE_POI_PARTITIONS.map((category) => [category, category === 'museum'])),
   'valid-station-partition': false,
   'station-zones': true,
   'transit-routes': true,
   coastline: false,
+  'supervisor-districts': false,
+  'zip-codes': false,
+  landmasses: false,
 };
 const initial: SharedState = {
   version: 2,
@@ -71,6 +79,8 @@ const initial: SharedState = {
   routeStatuses: {},
 };
 const colors = ['#553c9a', '#007c78', '#b45309', '#be185d', '#166534', '#0369a1', '#9f1239'];
+const partitionColor = (index: number, total: number, offset = 0) =>
+  `hsl(${Math.round((index * 360) / Math.max(1, total) + offset) % 360}, 62%, 39%)`;
 const measuringChoices = selectableSubjects(MEASURING_SUBJECTS);
 const matchingChoices = selectableSubjects(MATCHING_SUBJECTS);
 const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
@@ -207,6 +217,8 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [selectedStation, setSelectedStation] = useState(validStations[0]?.id ?? '');
   const [advancedQuestions, setAdvancedQuestions] = useState(false);
+  const [traceActive, setTraceActive] = useState(false);
+  const [tracePoints, setTracePoints] = useState<Position[]>([]);
 
   const partitions = useMemo(
     () => Object.fromEntries(REGION_CATEGORIES.map((category) => [category, partition(category)])),
@@ -227,6 +239,10 @@ export default function App() {
   const feasible = useMemo(
     () => combineConstraints(state.constraints, regions, stationArea),
     [regions, state.constraints, stationArea],
+  );
+  const traceDistanceMiles = useMemo(
+    () => pathDistanceMiles(tracePoints),
+    [tracePoints],
   );
 
   useEffect(() => {
@@ -276,15 +292,38 @@ export default function App() {
 
   useEffect(() => {
     const map = mapRef.current;
+    if (!map || status !== 'ready' || !traceActive) return;
+    const listener = map.addListener('click', (event: google.maps.MapMouseEvent) => {
+      const latLng = event.latLng;
+      if (!latLng) return;
+      const next = { lat: latLng.lat(), lng: latLng.lng() };
+      if (insideSanFrancisco(next)) setTracePoints((current) => [...current, next]);
+    });
+    return () => listener.remove();
+  }, [status, traceActive]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     if (!map || status !== 'ready') return;
     drawn.current?.setMap(null);
     const data = new google.maps.Data({ map });
     drawn.current = data;
 
-    PARTITION_CATEGORIES.filter((category) => state.layers[category]).forEach((category) => {
+    VISIBLE_POI_PARTITIONS.filter((category) => state.layers[category]).forEach((category) => {
       Object.entries(partitions[category]).forEach(([id, feature], index) => {
         data.addGeoJson({ ...feature, properties: { kind: 'region', color: colors[index % colors.length], id } });
       });
+    });
+    const geographicPartitions = [
+      { key: 'supervisor-districts', collection: supervisorDistricts, offset: 15 },
+      { key: 'zip-codes', collection: zipCodeAreas, offset: 210 },
+      { key: 'landmasses', collection: sfLandmasses, offset: 35 },
+    ];
+    geographicPartitions.filter(({ key }) => state.layers[key]).forEach(({ collection, offset }) => {
+      collection.features.forEach((feature, index) => data.addGeoJson({
+        ...feature,
+        properties: { ...feature.properties, kind: 'geographic-region', color: partitionColor(index, collection.features.length, offset), areaName: feature.properties.name },
+      }));
     });
     if (state.layers['valid-station-partition']) {
       Object.entries(partitions['game-valid-station']).forEach(([id, feature], index) => {
@@ -323,6 +362,13 @@ export default function App() {
         geometry: { type: 'Point', coordinates: [state.hiderPosition.lng, state.hiderPosition.lat] },
       });
     }
+    const traceLine = pathGeoJson(tracePoints);
+    if (traceLine) data.addGeoJson(traceLine);
+    tracePoints.forEach((position, index) => data.addGeoJson({
+      type: 'Feature',
+      properties: { kind: 'trace-point', endpoint: index === 0 ? 'start' : index === tracePoints.length - 1 ? 'end' : '' },
+      geometry: { type: 'Point', coordinates: [position.lng, position.lat] },
+    }));
 
     data.setStyle((feature) => {
       const kind = feature.getProperty('kind');
@@ -332,6 +378,11 @@ export default function App() {
       const eligible = eligibilityValue !== false;
       if (kind === 'feasible') return { fillColor: '#16a34a', fillOpacity: 0.28, strokeColor: '#166534', strokeWeight: 3 };
       if (kind === 'coastline') return { strokeColor: '#0284c7', strokeWeight: 4, fillOpacity: 0 };
+      if (kind === 'hider-trace') return { strokeColor: '#e11d48', strokeOpacity: 0.95, strokeWeight: 5, zIndex: 20 };
+      if (kind === 'trace-point') {
+        const endpoint = feature.getProperty('endpoint');
+        return { icon: { path: google.maps.SymbolPath.CIRCLE, fillColor: endpoint ? '#e11d48' : '#ffffff', fillOpacity: 1, strokeColor: '#e11d48', strokeWeight: 2, scale: endpoint ? 5 : 3 }, zIndex: 21 };
+      }
       if (kind === 'transit-route') {
         const mode = feature.getProperty('mode');
         return {
@@ -360,9 +411,18 @@ export default function App() {
       }
       const colorValue = feature.getProperty('color');
       const regionColor = typeof colorValue === 'string' ? colorValue : '#553c9a';
-      return { fillColor: regionColor, fillOpacity: kind === 'station-region' ? 0.08 : 0.12, strokeColor: regionColor, strokeWeight: 1 };
+      return { fillColor: regionColor, fillOpacity: kind === 'station-region' ? 0.08 : kind === 'geographic-region' ? 0.07 : 0.12, strokeColor: regionColor, strokeWeight: kind === 'geographic-region' ? 2 : 1 };
     });
-  }, [eligibleIds, feasible, partitions, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status]);
+    data.addListener('click', (event: google.maps.Data.MouseEvent) => {
+      if (traceActive && event.latLng) {
+        const next = { lat: event.latLng.lat(), lng: event.latLng.lng() };
+        if (insideSanFrancisco(next)) setTracePoints((current) => [...current, next]);
+        return;
+      }
+      const areaName = event.feature.getProperty('areaName');
+      if (typeof areaName === 'string') setMessage(areaName);
+    });
+  }, [eligibleIds, feasible, partitions, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status, traceActive, tracePoints]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
@@ -437,6 +497,30 @@ export default function App() {
     );
   };
 
+  const fitTrace = () => {
+    if (!mapRef.current || tracePoints.length === 0) return;
+    const bounds = new google.maps.LatLngBounds();
+    tracePoints.forEach((position) => bounds.extend(position));
+    mapRef.current.fitBounds(bounds, 36);
+  };
+
+  const addHiderPositionToTrace = () => {
+    if (!state.hiderPosition) {
+      setMessage('Set the hider position first.');
+      return;
+    }
+    setTracePoints((current) => [...current, state.hiderPosition!]);
+  };
+
+  const toggleTrace = () => {
+    if (traceActive) {
+      setTraceActive(false);
+      return;
+    }
+    setTraceActive(true);
+    requestAnimationFrame(() => mapNode.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  };
+
   const share = async () => {
     const url = new URL(location.href);
     const shareState = { ...state, hiderPosition: undefined, hiderMapUrl: undefined };
@@ -485,6 +569,19 @@ export default function App() {
               />
               <button className="secondary full" type="button" onClick={useMyLocation}>Use this device’s location</button>
               {state.hiderPosition && <p className="success-line">Position ready · omitted from shared URLs</p>}
+              <div className="trace-tool">
+                <h3>Trace a path</h3>
+                <p className="helper">For “Trace nearest street/path,” start tracing and tap each bend on the map from intersection to intersection. Undo points as needed, then take a screenshot. Trace data stays on this device and is omitted from shared URLs.</p>
+                <p className="trace-stats"><b>{tracePoints.length}</b> points · <b>{traceDistanceMiles < 0.1 ? `${Math.round(traceDistanceMiles * 5280)} ft` : `${traceDistanceMiles.toFixed(2)} mi`}</b></p>
+                <div className="trace-buttons">
+                  <button type="button" className={traceActive ? 'danger' : 'keep'} onClick={toggleTrace}>{traceActive ? 'Finish tracing' : 'Start tracing'}</button>
+                  <button type="button" className="secondary" disabled={tracePoints.length === 0} onClick={() => setTracePoints((current) => current.slice(0, -1))}>Undo point</button>
+                  <button type="button" className="secondary" disabled={!state.hiderPosition} onClick={addHiderPositionToTrace}>Add my pin</button>
+                  <button type="button" className="secondary" disabled={tracePoints.length === 0} onClick={fitTrace}>Fit trace</button>
+                  <button type="button" className="danger" disabled={tracePoints.length === 0} onClick={() => { setTracePoints([]); setTraceActive(false); }}>Clear</button>
+                </div>
+                {traceActive && <p className="success-line">Tracing is active · tap the map to add the next point</p>}
+              </div>
             </section>
           )}
 
@@ -501,6 +598,16 @@ export default function App() {
               <label className="toggle constrain"><input type="checkbox" checked={state.constrainToStationZones} onChange={(event) => setState((current) => ({ ...current, constrainToStationZones: event.target.checked }))} />Constrain feasible area to eligible zones</label>
             </div>
             <p className="helper">{eligibleIds.length} of {validStations.length} valid stations currently eligible. Route cuts remove stations within 0.1 mile of that official route geometry.</p>
+          </details>
+
+          <details className="panel">
+            <summary>Administrative and natural partitions</summary>
+            <div className="toggle-grid">
+              <label className="toggle"><input type="checkbox" checked={!!state.layers['supervisor-districts']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'supervisor-districts': event.target.checked } }))} />Supervisorial districts D1–D11</label>
+              <label className="toggle"><input type="checkbox" checked={!!state.layers['zip-codes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'zip-codes': event.target.checked } }))} />ZIP-code areas</label>
+              <label className="toggle"><input type="checkbox" checked={!!state.layers.landmasses} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, landmasses: event.target.checked } }))} />SF landmasses</label>
+            </div>
+            <p className="helper">Tap a displayed region to identify it. ZIP codes are generalized delivery areas and are offered as a requested homebrew fifth-level division.</p>
           </details>
 
           <details className="panel">
@@ -523,7 +630,7 @@ export default function App() {
           <details className="panel">
             <summary>POI partition layers</summary>
             <div className="toggle-grid">
-              {PARTITION_CATEGORIES.map((category) => (
+              {VISIBLE_POI_PARTITIONS.map((category) => (
                 <label className="toggle" key={category}><input type="checkbox" checked={!!state.layers[category]} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, [category]: event.target.checked } }))} />{CATEGORY_LABELS[category]}</label>
               ))}
             </div>
@@ -555,6 +662,8 @@ export default function App() {
                       ? districtAt(constraint.origin)?.properties.name
                       : category === 'landmass'
                         ? landmassAt(constraint.origin)?.properties.name
+                        : category === 'zip-code'
+                          ? zipCodeAt(constraint.origin)?.properties.name
                         : sourcePoi?.name;
               return (
                 <article key={constraint.id}>
@@ -585,14 +694,19 @@ export default function App() {
             <p className="source">{provenance.totalPois.toLocaleString()} normalized POIs from <a href={provenance.sourceUrl}>the SF spreadsheet</a> · retrieved {provenance.retrieved}</p>
             <p className="source">Routes: <a href={transitProvenance.sourceUrl}>DataSF Muni Simple Routes</a> · coastline: <a href={coastlineProvenance.sourceUrl}>DataSF SF Shoreline and Islands</a>.</p>
             <p className="source">Districts/water: <a href={rulebookAreaProvenance.districts.sourceUrl}>DataSF districts</a> / <a href={rulebookAreaProvenance.water.sourceUrl}>water bodies</a> · streets: <a href={streetProvenance.sourceUrl}>DataSF centerlines</a> · elevation: <a href={elevationProvenance.sourceUrl}>Mapzen terrain tiles</a>.</p>
+            <p className="source">ZIP areas: <a href={rulebookAreaProvenance.zipCodes.sourceUrl}>DataSF San Francisco ZIP Codes</a> · {zipCodeAreas.features.length} merged regions.</p>
             <p className="source">Interactive map coverage includes all in-play SF matching and measuring subjects. Approximate cards are labeled in their question notes. Photo cards are retained as reference because they do not determine a polygon. The map does not certify a final hiding spot: players must still confirm it is publicly accessible during game hours, safe, and within 10 feet of a marked path/road that the map app will use for walking directions.</p>
             {([['Matching', MATCHING_SUBJECTS], ['Measuring', MEASURING_SUBJECTS], ['Photos', PHOTO_SUBJECTS]] as const).map(([group, subjects]) => <details className="coverage-group" key={group}><summary>{group} deck audit · {subjects.filter((subject) => subject.status === 'in-play').length} in play</summary>{subjects.map((subject) => <p key={subject.id}><b>{subject.label}</b> · {subject.status === 'out-of-play' ? 'out of SF deck' : subject.status === 'experimental' ? 'experimental homebrew' : subject.support}</p>)}</details>)}
-            {PARTITION_CATEGORIES.filter((category) => state.layers[category]).flatMap((category) => pois.filter((poi) => poi.category === category).map((poi, index) => <div className="legend" key={poi.id}><i style={{ background: colors[index % colors.length] }} /><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>))}
+            {state.layers['supervisor-districts'] && supervisorDistricts.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, supervisorDistricts.features.length, 15) }} /><span>{feature.properties.name}</span><small>DataSF</small></div>)}
+            {state.layers['zip-codes'] && zipCodeAreas.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, zipCodeAreas.features.length, 210) }} /><span>{feature.properties.name}</span><small>ZIP</small></div>)}
+            {state.layers.landmasses && sfLandmasses.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, sfLandmasses.features.length, 35) }} /><span>{feature.properties.name}</span><small>SF rule</small></div>)}
+            {VISIBLE_POI_PARTITIONS.filter((category) => state.layers[category]).flatMap((category) => pois.filter((poi) => poi.category === category).map((poi, index) => <div className="legend" key={poi.id}><i style={{ background: colors[index % colors.length] }} /><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>))}
           </details>
         </aside>
         <section className="map-wrap" aria-label="San Francisco feasible area map">
           {status !== 'ready' && <div className={`notice ${status}`} role="status">{status === 'loading' ? 'Loading map…' : message}</div>}
           <div ref={mapNode} className="map" />
+          {state.mode === 'hider' && traceActive && <div className="trace-map-controls" role="toolbar" aria-label="Active path tracing controls"><span>{tracePoints.length} points · {traceDistanceMiles < 0.1 ? `${Math.round(traceDistanceMiles * 5280)} ft` : `${traceDistanceMiles.toFixed(2)} mi`}</span><button type="button" className="secondary" disabled={tracePoints.length === 0} onClick={() => setTracePoints((current) => current.slice(0, -1))}>Undo</button><button type="button" className="danger" onClick={() => setTraceActive(false)}>Finish</button></div>}
           <div className="attribution">POIs: linked SF dataset · routes/coast: DataSF · basemap © Google</div>
         </section>
       </div>
