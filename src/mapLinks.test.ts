@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import resolveMapLink from '../api/resolve-map-link';
 import { googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl } from './mapLinks';
 
@@ -39,5 +39,22 @@ describe('map-link resolver API', () => {
       new Request('https://jlhs.vercel.app/api/resolve-map-link?url=https%3A%2F%2Fexample.com'),
     );
     expect(response.status).toBe(400);
+  });
+
+  it('follows the supplied maps.app.goo.gl location link', async () => {
+    const source = 'https://maps.app.goo.gl/55eL3Ynzm9SE5uc97';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://www.google.com/maps/place/@37.7614347,-122.4240821,17z' },
+      }),
+    );
+    const response = await resolveMapLink(
+      new Request(`https://jlhs.vercel.app/api/resolve-map-link?url=${encodeURIComponent(source)}`),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ position: { lat: 37.7614347, lng: -122.4240821 } });
+    expect(fetchMock).toHaveBeenCalledWith(expect.objectContaining({ href: source }), expect.objectContaining({ redirect: 'manual' }));
+    fetchMock.mockRestore();
   });
 });

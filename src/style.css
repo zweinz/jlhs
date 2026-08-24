@@ -164,11 +164,12 @@ article {
 .answer-result.waiting strong { color: #92400e; }
 .map-link-field {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
   gap: .5rem;
-  align-items: end;
   margin-top: .7rem;
 }
+.map-link-actions { display: grid; grid-template-columns: 1fr 1.35fr auto; gap: .4rem; }
+.map-link-actions button { min-width: 0; padding-inline: .55rem; }
+.map-link-actions .clear-link { color: #8b1111; }
 .secondary { background: #e5edf7; color: #173f75; }
 .danger { background: #9b1c1c; }
 .remove { width: 100%; margin-top: .8rem; }
@@ -253,6 +254,7 @@ article {
   .constraint-heading { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
   .toast { left: auto; max-width: 420px; }
   .inline-controls { grid-template-columns: 1fr 1.35fr; align-items: end; }
+  .map-link-field { grid-template-columns: minmax(0, 1fr) minmax(285px, auto); align-items: end; }
 }
 
 @media (min-width: 820px) {

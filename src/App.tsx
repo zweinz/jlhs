@@ -137,10 +137,10 @@ type MapLinkFieldProps = {
 };
 
 function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLinkFieldProps) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'link' | 'location' | undefined>();
   const apply = async () => {
     try {
-      setBusy(true);
+      setBusy('link');
       const resolved = await resolveGoogleMapsLink(value.trim());
       if (!insideSanFrancisco(resolved)) throw new Error('That pin is outside the San Francisco working bounds.');
       onResolved(resolved);
@@ -148,8 +148,38 @@ function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLink
     } catch (error) {
       onMessage(error instanceof Error ? error.message : 'Could not use that Google Maps link.');
     } finally {
-      setBusy(false);
+      setBusy(undefined);
     }
+  };
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      onMessage('This browser does not provide geolocation. Paste a Google Maps link instead.');
+      return;
+    }
+    setBusy('location');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const resolved = { lat: coords.latitude, lng: coords.longitude };
+        if (!insideSanFrancisco(resolved)) {
+          onMessage('Your current position is outside the San Francisco working bounds.');
+          setBusy(undefined);
+          return;
+        }
+        onChange(googleMapsLinkForPosition(resolved));
+        onResolved(resolved);
+        onMessage(`${label} set from this device’s current location.`);
+        setBusy(undefined);
+      },
+      () => {
+        onMessage('Current location was not available. Allow location access or paste a Google Maps link.');
+        setBusy(undefined);
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
+  const clear = () => {
+    onChange('');
+    onMessage(`${label} link cleared. The mapped pin is unchanged until you set another location.`);
   };
   return (
     <div className="map-link-field">
@@ -165,9 +195,15 @@ function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLink
           onChange={(event) => onChange(event.target.value)}
         />
       </label>
-      <button className="secondary" type="button" disabled={!value.trim() || busy} onClick={apply}>
-        {busy ? 'Reading…' : 'Use pin'}
-      </button>
+      <div className="map-link-actions">
+        <button className="secondary" type="button" disabled={!value.trim() || !!busy} onClick={apply}>
+          {busy === 'link' ? 'Reading…' : 'Use pin'}
+        </button>
+        <button className="secondary" type="button" disabled={!!busy} onClick={useCurrentLocation}>
+          {busy === 'location' ? 'Locating…' : 'Use current location'}
+        </button>
+        <button className="secondary clear-link" type="button" disabled={!value || !!busy} onClick={clear} aria-label={`Clear ${label} link`}>Clear</button>
+      </div>
     </div>
   );
 }
@@ -476,27 +512,6 @@ export default function App() {
       return { ...current, [key]: statuses };
     });
 
-  const useMyLocation = () => {
-    if (!navigator.geolocation) {
-      setMessage('This browser does not provide geolocation. Paste a Google Maps link instead.');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const hiderPosition = { lat: coords.latitude, lng: coords.longitude };
-        if (!insideSanFrancisco(hiderPosition)) {
-          setMessage('Your current position is outside the San Francisco working bounds.');
-          return;
-        }
-        setState((current) => ({ ...current, hiderPosition }));
-        mapRef.current?.panTo(hiderPosition);
-        setMessage('Hider position set from this device.');
-      },
-      () => setMessage('Location access was not available. Paste a Google Maps link instead.'),
-      { enableHighAccuracy: true, timeout: 10000 },
-    );
-  };
-
   const fitTrace = () => {
     if (!mapRef.current || tracePoints.length === 0) return;
     const bounds = new google.maps.LatLngBounds();
@@ -567,7 +582,6 @@ export default function App() {
                 }}
                 onMessage={setMessage}
               />
-              <button className="secondary full" type="button" onClick={useMyLocation}>Use this device’s location</button>
               {state.hiderPosition && <p className="success-line">Position ready · omitted from shared URLs</p>}
               <div className="trace-tool">
                 <h3>Trace a path</h3>
