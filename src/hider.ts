@@ -55,7 +55,7 @@ export function hiderAnswer(constraint: Constraint, hider: Position, regions: Re
     if (category === 'station-name-length') {
       const seekerStation = nearestPoi('game-valid-station', constraint.origin);
       const hiderStation = nearestPoi('game-valid-station', hider);
-      if (!seekerStation || !hiderStation) return 'Null — no valid station is inside the map';
+      if (!seekerStation || !hiderStation) return 'Null — no station is inside the map';
       const seekerLength = normalizedStationNameLength(seekerStation.name);
       const hiderLength = normalizedStationNameLength(hiderStation.name);
       return seekerLength === hiderLength

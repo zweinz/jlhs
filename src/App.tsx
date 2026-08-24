@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
-import { setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
+import { excludeAllExcept, setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
 import { combineConstraints, excludedArea, nearestPoi, partition, stationIdsOverlappingArea } from './geometry';
 import {
   CATEGORY_LABELS,
@@ -43,9 +43,12 @@ import {
   distanceToRoute,
   eligibleStationIds,
   primaryTransitRoutes,
+  primaryTransitStationIds,
   routesForStation,
   transitProvenance,
   transitRouteGeoJson,
+  transitModeLabel,
+  transitRouteLabel,
   transitRoutes,
   validStations,
 } from './transit';
@@ -85,8 +88,6 @@ const partitionColor = (index: number, total: number, offset = 0) =>
 const measuringChoices = selectableSubjects(MEASURING_SUBJECTS);
 const matchingChoices = selectableSubjects(MATCHING_SUBJECTS);
 const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
-const routeModeLabel = (mode: (typeof transitRoutes)[number]['mode']) =>
-  mode === 'light-rail' ? 'light rail' : mode === 'rapid-muni' ? 'Rapid Muni' : 'other transit';
 
 let googleMapsPromise: Promise<typeof google.maps> | null = null;
 
@@ -423,7 +424,7 @@ export default function App() {
           : state.layers['transit-routes'],
       ).forEach((feature) => {
         const routeStatus = state.routeStatuses[feature.properties.routeId];
-        data.addGeoJson({ ...feature, properties: { ...feature.properties, kind: 'transit-route', status: routeStatus ?? '' } });
+        data.addGeoJson({ ...feature, properties: { ...feature.properties, kind: 'transit-route', status: routeStatus ?? '', areaName: transitRouteLabel(feature.properties) } });
       });
     }
     validStations.forEach((station) => {
@@ -602,6 +603,16 @@ export default function App() {
       routeStatuses: statusesForAll(transitRoutes.map((route) => route.id), value),
     }));
 
+  const usePrimaryTransitStationsOnly = () => {
+    setState((current) => ({
+      ...current,
+      stationStatuses: excludeAllExcept(validStations.map((station) => station.id), primaryTransitStationIds),
+      routeStatuses: {},
+      layers: { ...current.layers, 'transit-routes': true, 'other-transit-routes': false },
+    }));
+    setMessage(`${primaryTransitStationIds.length} light-rail or Rapid Muni stations kept; other stations removed.`);
+  };
+
   const fitTrace = () => {
     if (!mapRef.current || tracePoints.length === 0) return;
     const bounds = new google.maps.LatLngBounds();
@@ -710,7 +721,7 @@ export default function App() {
               <label>Hiding-zone radius (miles)<input type="number" min="0.05" max="5" step="0.05" value={state.stationZoneMiles} onChange={(event) => setState((current) => ({ ...current, stationZoneMiles: Math.max(0.05, Number(event.target.value) || 0.25) }))} /></label>
               <label>Area shading<select value={state.areaDisplayMode} onChange={(event) => setState((current) => ({ ...current, areaDisplayMode: event.target.value as AreaDisplayMode }))}><option value="allowed-green">Allowed green · excluded transparent</option><option value="excluded-red">Allowed transparent · excluded red</option></select></label>
             </div>
-            <p className="helper">{eligibleIds.length} of {validStations.length} valid stations currently possible. A station turns off when its hiding-radius zone no longer overlaps the green feasible area; explicit station and route cuts also apply.</p>
+            <p className="helper">{eligibleIds.length} of {validStations.length} stations currently possible. A station turns off when its hiding-radius zone no longer overlaps the green feasible area; explicit station and route cuts also apply.</p>
           </details>
 
           <details className="panel">
@@ -725,14 +736,16 @@ export default function App() {
 
           <details className="panel">
             <summary>Mark stations in / out</summary>
-            <h3>All valid stations</h3>
-            <div className="three-buttons" role="group" aria-label="Mark all valid stations">
+            <h3>All stations</h3>
+            <div className="three-buttons" role="group" aria-label="Mark all stations">
               <button type="button" className="keep" onClick={() => setAllStationEligibility('in')}>Keep all in</button>
               <button type="button" className="danger" onClick={() => setAllStationEligibility('out')}>Cut all out</button>
               <button type="button" className="secondary" onClick={() => setAllStationEligibility('')}>Clear all</button>
             </div>
-            <h3>One valid station</h3>
-            <label className="stacked">Valid station<select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value)}>{validStations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
+            <button type="button" className="secondary full primary-only" onClick={usePrimaryTransitStationsOnly}>Use light rail + Rapid stations only</button>
+            <p className="helper">This removes stations without either service, clears route cuts, shows the light-rail/Rapid layer, and hides Other transit.</p>
+            <h3>One station</h3>
+            <label className="stacked">Station<select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value)}>{validStations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
             {selectedStation && <p className="helper">Lines nearby: {routesForStation(selectedStation).join(', ') || 'no mapped transit-line match'}</p>}
             <div className="three-buttons">
               <button type="button" className="keep" onClick={() => setEligibility('station', selectedStation, 'in')}>Keep in</button>
@@ -743,7 +756,7 @@ export default function App() {
             <label className="stacked">All transit routes<select aria-label="All route eligibility" value={allRouteEligibility} onChange={(event) => setAllRouteEligibility(event.target.value as Eligibility | '')}><option value="">Unmarked all</option><option value="in">Keep all in</option><option value="out">Cut all out</option>{allRouteEligibility === 'mixed' && <option value="mixed" disabled>Mixed per-route settings</option>}</select></label>
             <div className="route-list">
               {transitRoutes.map((route) => (
-                <label key={route.id}><span><b>{route.id}</b><small>{routeModeLabel(route.mode)}</small></span><select aria-label={`${route.id} route eligibility`} value={state.routeStatuses[route.id] ?? ''} onChange={(event) => setEligibility('route', route.id, event.target.value as Eligibility | '')}><option value="">Unmarked</option><option value="in">Keep in</option><option value="out">Cut out</option></select></label>
+                <label key={route.id}><span><b>{route.id}</b><small>{transitModeLabel(route.mode)}</small></span><select aria-label={`${route.id} route eligibility`} value={state.routeStatuses[route.id] ?? ''} onChange={(event) => setEligibility('route', route.id, event.target.value as Eligibility | '')}><option value="">Unmarked</option><option value="in">Keep in</option><option value="out">Cut out</option></select></label>
               ))}
             </div>
           </details>
@@ -798,7 +811,7 @@ export default function App() {
                     {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
                     {constraint.kind === 'direction' && <label>Direction<select value={constraint.direction} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'south', 'east', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
                     {usesCategory && <label className="wide">Subject<select value={category} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? (constraint.kind === 'tentacle' ? primaryTransitRoutes[0]?.id : transitRoutes[0]?.id) : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
-                    {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s transit service<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{transitRoutes.map((route) => <option key={route.id} value={route.id}>{route.id} — {routeModeLabel(route.mode)}</option>)}</select></label>}
+                    {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s transit service<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{transitRoutes.map((route) => <option key={route.id} value={route.id}>{transitRouteLabel(route)}</option>)}</select></label>}
                     {constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{matchingSource ?? 'set the seeker pin'}</b></p>}

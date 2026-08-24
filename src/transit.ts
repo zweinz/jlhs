@@ -12,6 +12,12 @@ export type TransitRoute = {
   features: Feature<LineString | MultiLineString>[];
 };
 
+export const transitModeLabel = (mode: TransitRoute['mode']) =>
+  mode === 'light-rail' ? 'light rail' : mode === 'rapid-muni' ? 'Rapid Muni' : 'other transit';
+
+export const transitRouteLabel = (route: Pick<TransitRoute, 'name' | 'mode'>) =>
+  `${route.name} — ${transitModeLabel(route.mode)}`;
+
 type RouteProperties = { routeId: string; name: string; direction: string; mode: TransitRoute['mode'] };
 const routeCollection = routesRaw as FeatureCollection<LineString | MultiLineString, RouteProperties> & {
   provenance: Record<string, string>;
@@ -58,6 +64,11 @@ for (const station of validStations) {
 export function routesForStation(stationId: string) {
   return stationRoutes.get(stationId) ?? [];
 }
+
+const primaryRouteIds = new Set(primaryTransitRoutes.map((route) => route.id));
+export const primaryTransitStationIds = validStations
+  .filter((station) => routesForStation(station.id).some((routeId) => primaryRouteIds.has(routeId)))
+  .map((station) => station.id);
 
 export function stationsForRoute(routeId: string) {
   return validStations.filter((station) => routesForStation(station.id).includes(routeId));

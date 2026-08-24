@@ -51,7 +51,7 @@ export const CATEGORY_LABELS: Record<PoiCategory, string> = {
   hospital: 'Hospitals',
   'foreign-consulate': 'Foreign consulates',
   'farmers-market': 'Farmers markets',
-  'game-valid-station': 'Valid transit stations',
+  'game-valid-station': 'Transit stations',
   'rail-station': 'Rail stations',
   aquarium: 'Aquariums',
   'muni-stop': 'All Muni stops',
