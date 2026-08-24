@@ -1,4 +1,4 @@
-import { isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl } from '../src/mapLinks';
+import { isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFromGoogleMapsUrl } from '../src/mapLinks';
 
 export const config = { runtime: 'edge' };
 
@@ -17,6 +17,8 @@ export default async function handler(request: Request) {
       }
       const resolved = parseCoordinatesFromGoogleMapsUrl(current.href);
       if (resolved) return Response.json({ position: resolved });
+      const query = parsePlaceQueryFromGoogleMapsUrl(current.href);
+      if (query) return Response.json({ query });
       const response = await fetch(current, {
         redirect: 'manual',
         headers: { 'user-agent': 'Mozilla/5.0 (compatible; SF-Hiding-Area/1.0)' },
@@ -25,7 +27,7 @@ export default async function handler(request: Request) {
       if (!location) break;
       current = new URL(location, current);
     }
-    return Response.json({ error: 'The shared link did not expose a coordinate pin.' }, { status: 422 });
+    return Response.json({ error: 'The shared link did not expose a coordinate or place pin.' }, { status: 422 });
   } catch {
     return Response.json({ error: 'Google Maps did not resolve the shared link.' }, { status: 502 });
   }

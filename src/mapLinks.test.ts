@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import resolveMapLink from '../api/resolve-map-link';
-import { googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl } from './mapLinks';
+import { googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFromGoogleMapsUrl } from './mapLinks';
 
 describe('Google Maps link coordinates', () => {
   it('parses canonical place URLs', () => {
@@ -21,6 +21,13 @@ describe('Google Maps link coordinates', () => {
   it('rejects non-Google links', () => {
     expect(isGoogleMapsUrl('https://example.com/maps/@37.77,-122.44')).toBe(false);
     expect(parseCoordinatesFromGoogleMapsUrl('https://example.com/maps/@37.77,-122.44')).toBeNull();
+  });
+
+  it('extracts an address query only from an allow-listed Google Maps URL', () => {
+    expect(parsePlaceQueryFromGoogleMapsUrl('https://maps.google.com?q=330+Valdez+Ave,+San+Francisco,+CA+94127')).toBe(
+      '330 Valdez Ave, San Francisco, CA 94127',
+    );
+    expect(parsePlaceQueryFromGoogleMapsUrl('https://example.com/?q=330+Valdez+Ave')).toBeNull();
   });
 });
 
@@ -55,6 +62,22 @@ describe('map-link resolver API', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ position: { lat: 37.7614347, lng: -122.4240821 } });
     expect(fetchMock).toHaveBeenCalledWith(expect.objectContaining({ href: source }), expect.objectContaining({ redirect: 'manual' }));
+    fetchMock.mockRestore();
+  });
+
+  it('returns the place query exposed by an address-based short link', async () => {
+    const source = 'https://maps.app.goo.gl/brySMBrgJW6g4iwa9?g_st=ic';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://maps.google.com?q=330+Valdez+Ave,+San+Francisco,+CA+94127&entry=gps' },
+      }),
+    );
+    const response = await resolveMapLink(
+      new Request(`https://jlhs.vercel.app/api/resolve-map-link?url=${encodeURIComponent(source)}`),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ query: '330 Valdez Ave, San Francisco, CA 94127' });
     fetchMock.mockRestore();
   });
 });

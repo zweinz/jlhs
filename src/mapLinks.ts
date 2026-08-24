@@ -31,14 +31,37 @@ export function parseCoordinatesFromGoogleMapsUrl(value: string): Position | nul
   return null;
 }
 
+export function parsePlaceQueryFromGoogleMapsUrl(value: string): string | null {
+  if (!isGoogleMapsUrl(value)) return null;
+  const url = new URL(value);
+  for (const key of ['query', 'q']) {
+    const query = url.searchParams.get(key)?.trim();
+    const coordinates = query?.match(/^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/);
+    if (query && query.length <= 500 && !coordinates) return query;
+  }
+  return null;
+}
+
+async function geocodeGoogleMapsQuery(query: string): Promise<Position> {
+  if (!globalThis.google?.maps?.Geocoder) {
+    throw new Error('The map is still loading. Wait a moment and try the link again.');
+  }
+  const { results } = await new google.maps.Geocoder().geocode({ address: query });
+  const location = results[0]?.geometry.location;
+  if (!location) throw new Error('Google Maps could not locate the place shared by that link.');
+  return { lat: location.lat(), lng: location.lng() };
+}
+
 export async function resolveGoogleMapsLink(value: string): Promise<Position> {
   if (!isGoogleMapsUrl(value)) throw new Error('Paste a Google Maps link.');
   const direct = parseCoordinatesFromGoogleMapsUrl(value);
   if (direct) return direct;
   const response = await fetch(`/api/resolve-map-link?url=${encodeURIComponent(value)}`);
-  const body = (await response.json()) as { position?: Position; error?: string };
-  if (!response.ok || !body.position) throw new Error(body.error ?? 'Could not resolve that Google Maps link.');
-  return body.position;
+  const body = (await response.json()) as { position?: Position; query?: string; error?: string };
+  if (!response.ok) throw new Error(body.error ?? 'Could not resolve that Google Maps link.');
+  if (body.position) return body.position;
+  if (body.query) return geocodeGoogleMapsQuery(body.query);
+  throw new Error(body.error ?? 'Could not resolve that Google Maps link.');
 }
 
 export function googleMapsLinkForPosition(value: Position) {
