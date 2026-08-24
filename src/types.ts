@@ -34,6 +34,7 @@ export interface Constraint {
 }
 export type Area = Feature<Polygon | MultiPolygon>;
 export type AreaDisplayMode = 'allowed-green' | 'excluded-red';
+export type TransitScope = 'all' | 'primary';
 export interface SharedState {
   version: 2;
   constraints: Constraint[];
@@ -44,6 +45,7 @@ export interface SharedState {
   hiderMapUrl?: string;
   stationZoneMiles: number;
   areaDisplayMode: AreaDisplayMode;
+  transitScope: TransitScope;
   stationStatuses: Record<string, Eligibility>;
   routeStatuses: Record<string, Eligibility>;
 }

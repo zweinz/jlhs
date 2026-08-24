@@ -286,19 +286,20 @@ const state: SharedState = {
   mode: 'seeker',
   stationZoneMiles: 0.25,
   areaDisplayMode: 'allowed-green',
+  transitScope: 'all',
   stationStatuses: {},
   routeStatuses: {},
 };
 
 it('round trips versioned shared state', () => expect(decodeState(encodeState(state))).toEqual(state));
 it('defaults old version 2 shares to green allowed-area shading', () => {
-  const { areaDisplayMode: _areaDisplayMode, ...oldState } = state;
-  expect(validateState(oldState)).toMatchObject({ areaDisplayMode: 'allowed-green' });
+  const { areaDisplayMode: _areaDisplayMode, transitScope: _transitScope, ...oldState } = state;
+  expect(validateState(oldState)).toMatchObject({ areaDisplayMode: 'allowed-green', transitScope: 'all' });
 });
 it('migrates a valid version 1 share payload', () => {
   const legacy = { version: 1, constraints: [base('radius')], layers: { museum: true }, viewport: state.viewport };
   const payload = btoa(unescape(encodeURIComponent(JSON.stringify(legacy)))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-  expect(decodeState(payload)).toMatchObject({ version: 2, stationZoneMiles: 0.25, areaDisplayMode: 'allowed-green', mode: 'seeker' });
+  expect(decodeState(payload)).toMatchObject({ version: 2, stationZoneMiles: 0.25, areaDisplayMode: 'allowed-green', transitScope: 'all', mode: 'seeker' });
 });
 it('rejects malformed shared configurations', () => {
   expect(() => decodeState('garbage')).toThrow();

@@ -186,7 +186,6 @@ article {
 .route-list label > span { display: grid; grid-template-columns: minmax(3.4rem, auto) minmax(0, 1fr); align-items: center; }
 .route-list label > span b { white-space: nowrap; }
 .route-list small { color: #586573; }
-.primary-only { margin-bottom: .25rem; }
 .derived { margin-top: .55rem; padding: .45rem .55rem; border-radius: .45rem; background: #edf3f9; font-size: .8rem; }
 .answer-result { display: grid; gap: .1rem; margin: .55rem 0; padding: .6rem; border-left: 4px solid #166534; border-radius: .4rem; background: #eaf7ee; }
 .answer-result span { color: #3f4d5a; font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }

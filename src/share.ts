@@ -1,5 +1,5 @@
 import { SF_BOUNDS } from './data';
-import type { AreaDisplayMode, Constraint, Position, SharedState } from './types';
+import type { AreaDisplayMode, Constraint, Position, SharedState, TransitScope } from './types';
 
 const kinds = new Set([
   'radar',
@@ -45,6 +45,7 @@ export function validateState(value: unknown): SharedState {
   if (!value || typeof value !== 'object') throw Error('Configuration is not an object');
   const state = value as SharedState;
   const areaDisplayMode = (state.areaDisplayMode ?? 'allowed-green') as AreaDisplayMode;
+  const transitScope = (state.transitScope ?? 'all') as TransitScope;
   if (
     state.version !== 2 ||
     !Array.isArray(state.constraints) ||
@@ -62,6 +63,7 @@ export function validateState(value: unknown): SharedState {
     throw Error('Unsupported or incomplete configuration');
   }
   if (!['allowed-green', 'excluded-red'].includes(areaDisplayMode)) throw Error('Invalid area display mode');
+  if (!['all', 'primary'].includes(transitScope)) throw Error('Invalid transit scope');
   if (!validPosition(state.viewport.center) || !Number.isFinite(state.viewport.zoom) || state.viewport.zoom < 8 || state.viewport.zoom > 22) {
     throw Error('Invalid viewport');
   }
@@ -95,7 +97,7 @@ export function validateState(value: unknown): SharedState {
       throw Error('Invalid constraint');
     }
   }
-  return { ...state, areaDisplayMode };
+  return { ...state, areaDisplayMode, transitScope };
 }
 
 function migrate(value: unknown) {
@@ -108,6 +110,7 @@ function migrate(value: unknown) {
     mode: 'seeker',
     stationZoneMiles: 0.25,
     areaDisplayMode: 'allowed-green',
+    transitScope: 'all',
     stationStatuses: {},
     routeStatuses: {},
   };
