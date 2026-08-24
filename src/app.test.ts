@@ -73,20 +73,28 @@ describe('SF rulebook audit', () => {
   });
 
   it('catalogs the complete investigation-book inventories and SF decisions', () => {
-    expect(MATCHING_SUBJECTS.filter((subject) => !subject.label.includes('homebrew'))).toHaveLength(20);
-    expect(MEASURING_SUBJECTS.filter((subject) => !subject.label.includes('homebrew'))).toHaveLength(20);
-    expect(PHOTO_SUBJECTS.filter((subject) => subject.status !== 'experimental')).toHaveLength(18);
+    expect(MATCHING_SUBJECTS).toHaveLength(20);
+    expect(MEASURING_SUBJECTS).toHaveLength(20);
+    expect(PHOTO_SUBJECTS).toHaveLength(18);
+    expect([...MATCHING_SUBJECTS, ...MEASURING_SUBJECTS, ...PHOTO_SUBJECTS].some((subject) => /homebrew/i.test(subject.label))).toBe(false);
     expect(MATCHING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('out-of-play');
     expect(MEASURING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('in-play');
     expect(selectableSubjects(MEASURING_SUBJECTS).some((subject) => subject.id === 'sea-level')).toBe(true);
     expect([...MATCHING_SUBJECTS, ...MEASURING_SUBJECTS].filter((subject) => subject.status === 'in-play').every((subject) => subject.support !== 'not-mapped')).toBe(true);
   });
 
-  it('includes the twelve SF small-game photo cards with their card-specific instructions', () => {
+  it('includes every medium-game photo card with its card-specific instructions', () => {
     const sfPhotos = PHOTO_SUBJECTS.filter((subject) => subject.status === 'in-play');
-    expect(sfPhotos).toHaveLength(12);
+    expect(sfPhotos).toHaveLength(14);
     expect(sfPhotos.every((subject) => subject.notes.length > 0)).toBe(true);
     expect(sfPhotos.find((subject) => subject.id === 'restaurant-interior')?.notes.join(' ')).toMatch(/window/i);
+    expect(sfPhotos.find((subject) => subject.id === 'tallest-building-visible-from-station')?.notes.join(' ')).toMatch(/upper third/i);
+    expect(sfPhotos.find((subject) => subject.id === 'train-platform')?.notes.join(' ')).toMatch(/5×5/i);
+  });
+
+  it('records the custom radar and thermometer game modifications', () => {
+    expect(QUESTION_DEFINITIONS.radar.notes.join(' ')).toMatch(/custom radar/i);
+    expect(QUESTION_DEFINITIONS.thermometer.notes.join(' ')).toMatch(/custom thermometer/i);
   });
 });
 

@@ -23,6 +23,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       ...commonQuestionNotes,
       'The answer is based on the hider’s current location, not whether any part of the hiding zone overlaps the circle.',
       'Rulebook distances: ¼, ½, 1, 3, 5, 10, 25, 50, or 100 miles; use a distance appropriate to the map.',
+      'Game modification: custom radar distances are allowed when the players agree on the distance.',
       'The hider answers yes or no.',
     ],
     drawInstruction: 'Draw 2, keep 1',
@@ -37,6 +38,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'The seeker sends a starting pin, travels the stated minimum crow-flies distance, then sends an ending pin.',
       'Hotter means the ending pin is closer to the hider; otherwise the answer is colder.',
       'Distances: ½ and 3 miles for all games; add 10 miles for medium/large and 50 miles for large.',
+      'Game modification: custom thermometer distances are allowed when the players agree on the distance.',
     ],
     drawInstruction: 'Draw 2, keep 1',
     timeLimit: '5 minutes',
@@ -107,6 +109,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     notes: [
       ...commonQuestionNotes,
       'Photo questions require the hider to take a new photo after the question is asked, from their current location unless the card says otherwise.',
+      'Game modification: every medium-game photo card is allowed in this game.',
       'Use the phone’s normal aspect ratio. “I cannot answer” is valid when the requested subject does not exist or is inaccessible in the hiding zone.',
       'Google Street View cannot be used to assess photos or verify stations from afar.',
       'The image must follow the card’s framing/content rules; ambiguity should be resolved consistently by the players.',

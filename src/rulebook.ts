@@ -1,4 +1,4 @@
-export type SubjectStatus = 'in-play' | 'out-of-play' | 'experimental';
+export type SubjectStatus = 'in-play' | 'out-of-play';
 export type SubjectSupport = 'exact' | 'approximate' | 'reference' | 'not-mapped';
 
 export type RulebookSubject = {
@@ -26,7 +26,6 @@ export const MATCHING_SUBJECTS: RulebookSubject[] = [
   excluded('admin-2', '2nd administrative division', 'Not in the SF deck.'),
   excluded('admin-3', '3rd administrative division', 'Not in the SF deck.'),
   { id: 'supervisor-district', label: '4th administrative division', status: 'in-play', support: 'exact', notes: ['For SF, this means current Supervisorial Districts D1–D11.'] },
-  { id: 'zip-code', label: '5th administrative division: ZIP code (homebrew)', status: 'experimental', support: 'exact', notes: ['Requested SF homebrew: match the generalized ZIP-code area containing each player.', 'ZIP codes are USPS delivery-route identifiers rather than formal administrative divisions; DataSF’s polygons are generalized areal representations.'] },
   { id: 'mountain', label: 'Mountain', status: 'in-play', support: 'exact', notes: ['Uses the SF-modified list of 16 hills at least 400 feet high.'] },
   { id: 'landmass', label: 'Landmass', status: 'in-play', support: 'exact', notes: ['A landmass is a contiguous piece of land not broken by a waterway.', 'For this SF deck the three answers are Treasure Island, Strawberry Hill, and everything else in San Francisco.'] },
   { id: 'dog-park', label: 'Park (dog park)', status: 'in-play', support: 'exact', notes: ['SF replaces “park” with the spreadsheet-defined dog parks.'] },
@@ -39,8 +38,6 @@ export const MATCHING_SUBJECTS: RulebookSubject[] = [
   { id: 'hospital', label: 'Hospital', status: 'in-play', support: 'exact', notes: ['Uses the curated SF hospital list; clinics and veterinary hospitals do not count.'] },
   { id: 'library', label: 'Library', status: 'in-play', support: 'exact', notes: ['Uses SFPL branches plus the Treasure Island kiosk; school, private, and sidewalk libraries do not count.'] },
   { id: 'foreign-consulate', label: 'Foreign consulate', status: 'in-play', support: 'exact', notes: ['Uses consulates general plus TECO; honorary consulates do not count.'] },
-  { id: 'farmers-market', label: 'Farmers market (homebrew)', status: 'experimental', support: 'exact', notes: ['Untested SF homebrew card. Uses recurring direct-to-consumer farmers markets with at least five reviews.'] },
-  { id: 'parking-permit-color', label: 'Parking-permit color (homebrew)', status: 'experimental', support: 'not-mapped', notes: ['Untested SF homebrew card. Deliberately not offered until its permit-zone geometry is normalized and verified.'] },
 ];
 
 export const MEASURING_SUBJECTS: RulebookSubject[] = [
@@ -64,11 +61,10 @@ export const MEASURING_SUBJECTS: RulebookSubject[] = [
   { id: 'hospital', label: 'Hospital', status: 'in-play', support: 'exact', notes: ['Clinics and veterinary hospitals do not count.'] },
   { id: 'library', label: 'Library', status: 'in-play', support: 'exact', notes: ['School, private, and sidewalk libraries do not count.'] },
   { id: 'foreign-consulate', label: 'Foreign consulate', status: 'in-play', support: 'exact', notes: ['Honorary consulates do not count.'] },
-  { id: 'cannabis-dispensary', label: 'Cannabis dispensary (homebrew)', status: 'experimental', support: 'not-mapped', notes: ['Untested SF homebrew card. Deliberately not offered because it has no verified SF spreadsheet dataset.'] },
 ];
 
 const photo = (id: string, label: string, ...notes: string[]): RulebookSubject => ({ id, label, status: 'in-play', support: 'reference', notes });
-const mediumPhoto = (id: string, label: string, ...notes: string[]) => photo(id, label, 'Added to the SF small-game deck from the medium-game photo cards.', ...notes);
+const mediumPhoto = (id: string, label: string, ...notes: string[]) => photo(id, label, 'Game modification: all medium-game photo cards are allowed.', ...notes);
 
 export const PHOTO_SUBJECTS: RulebookSubject[] = [
   photo('a-tree', 'A tree', 'The entire tree must be visible.'),
@@ -77,24 +73,22 @@ export const PHOTO_SUBJECTS: RulebookSubject[] = [
   photo('widest-street', 'Widest street', 'Include both sides of the street; background is not required.'),
   photo('tallest-structure-in-your-sightline', 'Tallest structure in your sightline', 'Use the tallest structure from the hider’s perspective, not objectively tallest.', 'Include the top and both sides; place the top in the upper third of the frame.'),
   photo('any-building-visible-from-station', 'Any building visible from station', 'Stand directly outside a station entrance; if there are multiple entrances, choose one.', 'Include the roof and both sides, with the top in the upper third. For an SF bus-stop hiding station, the building may be visible from either inbound or outbound stop.'),
+  mediumPhoto('tallest-building-visible-from-station', 'Tallest building visible from station', 'Use the tallest building from the hider’s perspective, not the objectively tallest building.', 'Stand directly outside a station entrance; if there are multiple entrances, choose one. Include the roof and both sides, with the top in the upper third.', 'The station itself does not count unless an unrelated tall building sits above it.'),
   mediumPhoto('trace-nearest-street-path', 'Trace nearest street/path', 'The street/path must appear in the mapping app. Trace it intersection-to-intersection.', 'A screenshot may be blacked out around the street, or the route may be physically traced from the phone.'),
   mediumPhoto('two-buildings', 'Two buildings', 'Include each building’s bottom and no more than four stories.'),
   mediumPhoto('restaurant-interior', 'Restaurant interior', 'No zoom. Take the picture through the window from outside the restaurant.'),
   mediumPhoto('park', 'Park', 'No zoom; phone perpendicular to the ground; stand five feet from any obstruction.', 'SF counts Google categories Park, City Park, Memorial Park, or Dog Park with more than five reviews.'),
   mediumPhoto('grocery-store-aisle', 'Grocery-store aisle', 'No zoom. Stand at the end of the aisle and shoot directly down it.', 'SF counts Google categories Grocery Store, Supermarket, Convenience Store, Liquor Store, or Wine Store with more than five reviews.'),
   mediumPhoto('place-of-worship', 'Place of worship', 'Include a 5×5-foot section with three distinct, location-matchable elements.'),
-  excluded('tallest-building-visible-from-station', 'Tallest building visible from station', 'Not added to the SF small-game deck.'),
-  excluded('train-platform', 'Train platform', 'Not added to the SF small-game deck.'),
+  mediumPhoto('train-platform', 'Train platform', 'Include a 5×5-foot section with three distinct, location-matchable elements.'),
   excluded('half-mile-of-streets-traced', '½ mile of streets traced', 'Not added to the SF small-game deck.'),
   excluded('tallest-mountain-visible-from-station', 'Tallest mountain visible from station', 'Not added to the SF small-game deck.'),
   excluded('biggest-body-of-water-in-your-zone', 'Biggest body of water in your zone', 'Not added to the SF small-game deck.'),
   excluded('five-buildings', 'Five buildings', 'Not added to the SF small-game deck.'),
-  { id: 'house-number', label: 'House number (homebrew)', status: 'experimental', support: 'reference', notes: ['Untested SF homebrew. The complete house/building number must be visible.'] },
-  { id: 'ambient-audio', label: '30 seconds of ambient audio (homebrew)', status: 'experimental', support: 'reference', notes: ['Untested SF homebrew. Record 30 seconds without speaking, breathing heavily into the microphone, or deliberately interfering with ambient sound.'] },
 ];
 
 export const selectableSubjects = (subjects: RulebookSubject[]) =>
-  subjects.filter((subject) => subject.status === 'in-play' || (subject.status === 'experimental' && subject.support !== 'not-mapped'));
+  subjects.filter((subject) => subject.status === 'in-play');
 
 export const subjectById = (subjects: RulebookSubject[], id?: string) =>
   subjects.find((subject) => subject.id === id);

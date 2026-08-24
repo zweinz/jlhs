@@ -252,7 +252,6 @@ export default function App() {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [message, setMessage] = useState('');
   const [selectedStation, setSelectedStation] = useState(validStations[0]?.id ?? '');
-  const [advancedQuestions, setAdvancedQuestions] = useState(false);
   const [traceActive, setTraceActive] = useState(false);
   const [tracePoints, setTracePoints] = useState<Position[]>([]);
 
@@ -476,7 +475,6 @@ export default function App() {
     setState((current) => ({
       ...current,
       constraints: [
-        ...current.constraints,
         {
           id: crypto.randomUUID(),
           name: QUESTION_DEFINITIONS[kind].label,
@@ -490,6 +488,7 @@ export default function App() {
           category,
           regionId,
         },
+        ...current.constraints,
       ],
     }));
   };
@@ -548,10 +547,6 @@ export default function App() {
       setMessage('Share URL is ready in the address bar. Your hider position was not included.');
     }
   };
-
-  const questionKinds = advancedQuestions
-    ? Object.keys(QUESTION_DEFINITIONS) as QuestionKind[]
-    : PRIMARY_QUESTION_KINDS;
 
   return (
     <main>
@@ -621,7 +616,7 @@ export default function App() {
               <label className="toggle"><input type="checkbox" checked={!!state.layers['zip-codes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'zip-codes': event.target.checked } }))} />ZIP-code areas</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers.landmasses} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, landmasses: event.target.checked } }))} />SF landmasses</label>
             </div>
-            <p className="helper">Tap a displayed region to identify it. ZIP codes are generalized delivery areas and are offered as a requested homebrew fifth-level division.</p>
+            <p className="helper">Tap a displayed region to identify it. ZIP codes are generalized delivery areas, not official administrative districts.</p>
           </details>
 
           <details className="panel">
@@ -651,8 +646,8 @@ export default function App() {
           </details>
 
           <section className="questions">
-            <div className="section-heading"><h2>Questions</h2><label className="compact-toggle"><input type="checkbox" checked={advancedQuestions} onChange={(event) => setAdvancedQuestions(event.target.checked)} />Manual tools</label></div>
-            <div className="add"><select id="kind" aria-label="Question type">{questionKinds.map((kind) => <option key={kind} value={kind}>{QUESTION_DEFINITIONS[kind].label}</option>)}</select><button onClick={add}>Add</button></div>
+            <div className="section-heading"><h2>Questions</h2></div>
+            <div className="add"><select id="kind" aria-label="Question type">{PRIMARY_QUESTION_KINDS.map((kind) => <option key={kind} value={kind}>{QUESTION_DEFINITIONS[kind].label}</option>)}</select><button onClick={add}>Add</button></div>
             {state.constraints.length === 0 && <p className="empty-state">Add a question, then paste the Google Maps links the players shared.</p>}
             {state.constraints.map((constraint) => {
               const definition = QUESTION_DEFINITIONS[constraint.kind];
@@ -686,16 +681,16 @@ export default function App() {
                   {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition ? '' : 'waiting'}`}><span>Hider answer</span><strong>{state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
                   <div className="control-grid">
                     {constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
-                    {usesDistance && (constraint.kind === 'thermometer' ? <label>Miles<select aria-label={`${constraint.name} distance in miles`} value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })}>{[0.5, 3, 10, 50].map((miles) => <option key={miles} value={miles}>{miles}</option>)}</select></label> : <label>Miles<input aria-label={`${constraint.name} distance in miles`} type="number" min="0.05" step={constraint.kind === 'radar' ? 0.25 : 0.05} value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>)}
+                    {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
                     {constraint.kind === 'direction' && <label>Direction<select value={constraint.direction} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'south', 'east', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
-                    {usesCategory && <label className="wide">Subject<select value={category} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? transitRoutes[0]?.id : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}{item.status === 'experimental' ? ' · homebrew' : ''}</option>)}</select></label>}
+                    {usesCategory && <label className="wide">Subject<select value={category} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? transitRoutes[0]?.id : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
                     {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s transit service<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{transitRoutes.map((route) => <option key={route.id} value={route.id}>{route.id} — {route.mode === 'light-rail' ? 'light rail' : 'Rapid Muni'}</option>)}</select></label>}
                     {constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? transitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{matchingSource ?? 'set the seeker pin'}</b></p>}
                   {usesOrigin && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
                   {usesTarget && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
-                  <div className="rule-notes"><h3>Rulebook notes</h3>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate map support' : selectedSubject.status === 'experimental' ? 'Experimental homebrew' : selectedSubject.support === 'reference' ? 'Reference card' : 'Mapped exactly'}</b></p>}<ul>{[...definition.notes, ...(selectedSubject?.notes ?? [])].map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</div>
+                  <div className="rule-notes"><h3>Rulebook notes</h3>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate map support' : selectedSubject.support === 'reference' ? 'Reference card' : 'Mapped exactly'}</b></p>}<ul>{[...definition.notes, ...(selectedSubject?.notes ?? [])].map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</div>
                   <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>
                 </article>
               );
@@ -710,7 +705,7 @@ export default function App() {
             <p className="source">Districts/water: <a href={rulebookAreaProvenance.districts.sourceUrl}>DataSF districts</a> / <a href={rulebookAreaProvenance.water.sourceUrl}>water bodies</a> · streets: <a href={streetProvenance.sourceUrl}>DataSF centerlines</a> · elevation: <a href={elevationProvenance.sourceUrl}>Mapzen terrain tiles</a>.</p>
             <p className="source">ZIP areas: <a href={rulebookAreaProvenance.zipCodes.sourceUrl}>DataSF San Francisco ZIP Codes</a> · {zipCodeAreas.features.length} merged regions.</p>
             <p className="source">Interactive map coverage includes all in-play SF matching and measuring subjects. Approximate cards are labeled in their question notes. Photo cards are retained as reference because they do not determine a polygon. The map does not certify a final hiding spot: players must still confirm it is publicly accessible during game hours, safe, and within 10 feet of a marked path/road that the map app will use for walking directions.</p>
-            {([['Matching', MATCHING_SUBJECTS], ['Measuring', MEASURING_SUBJECTS], ['Photos', PHOTO_SUBJECTS]] as const).map(([group, subjects]) => <details className="coverage-group" key={group}><summary>{group} deck audit · {subjects.filter((subject) => subject.status === 'in-play').length} in play</summary>{subjects.map((subject) => <p key={subject.id}><b>{subject.label}</b> · {subject.status === 'out-of-play' ? 'out of SF deck' : subject.status === 'experimental' ? 'experimental homebrew' : subject.support}</p>)}</details>)}
+            {([['Matching', MATCHING_SUBJECTS], ['Measuring', MEASURING_SUBJECTS], ['Photos', PHOTO_SUBJECTS]] as const).map(([group, subjects]) => <details className="coverage-group" key={group}><summary>{group} deck audit · {subjects.filter((subject) => subject.status === 'in-play').length} in play</summary>{subjects.map((subject) => <p key={subject.id}><b>{subject.label}</b> · {subject.status === 'out-of-play' ? 'out of SF deck' : subject.support}</p>)}</details>)}
             {state.layers['supervisor-districts'] && supervisorDistricts.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, supervisorDistricts.features.length, 15) }} /><span>{feature.properties.name}</span><small>DataSF</small></div>)}
             {state.layers['zip-codes'] && zipCodeAreas.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, zipCodeAreas.features.length, 210) }} /><span>{feature.properties.name}</span><small>ZIP</small></div>)}
             {state.layers.landmasses && sfLandmasses.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, sfLandmasses.features.length, 35) }} /><span>{feature.properties.name}</span><small>SF rule</small></div>)}
