@@ -253,6 +253,7 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [selectedStation, setSelectedStation] = useState(validStations[0]?.id ?? '');
   const [traceActive, setTraceActive] = useState(false);
+  const [traceScreenshot, setTraceScreenshot] = useState(false);
   const [tracePoints, setTracePoints] = useState<Position[]>([]);
 
   const partitions = useMemo(
@@ -337,6 +338,31 @@ export default function App() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || status !== 'ready') return;
+    map.setOptions(traceScreenshot ? {
+      backgroundColor: '#f8fafc',
+      disableDefaultUI: true,
+      gestureHandling: 'none',
+      keyboardShortcuts: false,
+      styles: [{ featureType: 'all', elementType: 'all', stylers: [{ visibility: 'off' }] }],
+    } : {
+      backgroundColor: '#dce5ed',
+      disableDefaultUI: false,
+      fullscreenControl: false,
+      gestureHandling: 'greedy',
+      keyboardShortcuts: true,
+      mapTypeControl: false,
+      streetViewControl: false,
+      styles: [],
+    });
+  }, [status, traceScreenshot]);
+
+  useEffect(() => {
+    if (state.mode !== 'hider' && traceScreenshot) setTraceScreenshot(false);
+  }, [state.mode, traceScreenshot]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || status !== 'ready') return;
     drawn.current?.setMap(null);
     const data = new google.maps.Data({ map });
     drawn.current = data;
@@ -399,6 +425,7 @@ export default function App() {
 
     data.setStyle((feature) => {
       const kind = feature.getProperty('kind');
+      if (traceScreenshot && kind !== 'hider-trace' && kind !== 'trace-point') return { visible: false };
       const statusValue = feature.getProperty('status');
       const eligibilityValue = feature.getProperty('eligible');
       const routeStatus = statusValue === 'in' || statusValue === 'out' ? statusValue : undefined;
@@ -449,7 +476,7 @@ export default function App() {
       const areaName = event.feature.getProperty('areaName');
       if (typeof areaName === 'string') setMessage(areaName);
     });
-  }, [eligibleIds, feasible, partitions, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status, traceActive, tracePoints]);
+  }, [eligibleIds, feasible, partitions, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
@@ -523,8 +550,19 @@ export default function App() {
       setTraceActive(false);
       return;
     }
+    setTraceScreenshot(false);
     setTraceActive(true);
     requestAnimationFrame(() => mapNode.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  };
+
+  const toggleTraceScreenshot = () => {
+    const next = !traceScreenshot;
+    setTraceScreenshot(next);
+    setTraceActive(false);
+    requestAnimationFrame(() => {
+      if (mapRef.current) google.maps.event.trigger(mapRef.current, 'resize');
+      if (next) fitTrace();
+    });
   };
 
   const share = async () => {
@@ -572,16 +610,18 @@ export default function App() {
               {state.hiderPosition && <p className="success-line">Position ready · omitted from shared URLs</p>}
               <div className="trace-tool">
                 <h3>Trace a path</h3>
-                <p className="helper">For “Trace nearest street/path,” start tracing and tap each bend on the map from intersection to intersection. Undo points as needed, then take a screenshot. Trace data stays on this device and is omitted from shared URLs.</p>
+                <p className="helper">For “Trace nearest street/path,” start tracing and tap each bend on the map from intersection to intersection. When finished, open Screenshot view to remove the basemap and every other layer before capturing the trace. Trace data stays on this device and is omitted from shared URLs.</p>
                 <p className="trace-stats"><b>{tracePoints.length}</b> points · <b>{traceDistanceMiles < 0.1 ? `${Math.round(traceDistanceMiles * 5280)} ft` : `${traceDistanceMiles.toFixed(2)} mi`}</b></p>
                 <div className="trace-buttons">
                   <button type="button" className={traceActive ? 'danger' : 'keep'} onClick={toggleTrace}>{traceActive ? 'Finish tracing' : 'Start tracing'}</button>
                   <button type="button" className="secondary" disabled={tracePoints.length === 0} onClick={() => setTracePoints((current) => current.slice(0, -1))}>Undo point</button>
                   <button type="button" className="secondary" disabled={!state.hiderPosition} onClick={addHiderPositionToTrace}>Add my pin</button>
                   <button type="button" className="secondary" disabled={tracePoints.length === 0} onClick={fitTrace}>Fit trace</button>
-                  <button type="button" className="danger" disabled={tracePoints.length === 0} onClick={() => { setTracePoints([]); setTraceActive(false); }}>Clear</button>
+                  <button type="button" className={traceScreenshot ? 'danger' : 'secondary'} disabled={tracePoints.length < 2} onClick={toggleTraceScreenshot}>{traceScreenshot ? 'Show map again' : 'Screenshot view'}</button>
+                  <button type="button" className="danger" disabled={tracePoints.length === 0} onClick={() => { setTracePoints([]); setTraceActive(false); setTraceScreenshot(false); }}>Clear</button>
                 </div>
                 {traceActive && <p className="success-line">Tracing is active · tap the map to add the next point</p>}
+                {traceScreenshot && <p className="success-line">Screenshot view is active · only the trace is visible on the map</p>}
               </div>
             </section>
           )}
@@ -702,9 +742,10 @@ export default function App() {
             {VISIBLE_POI_PARTITIONS.filter((category) => state.layers[category]).flatMap((category) => pois.filter((poi) => poi.category === category).map((poi, index) => <div className="legend" key={poi.id}><i style={{ background: colors[index % colors.length] }} /><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>))}
           </details>
         </aside>
-        <section className="map-wrap" aria-label="San Francisco feasible area map">
+        <section className={`map-wrap${traceScreenshot ? ' trace-screenshot' : ''}`} aria-label={traceScreenshot ? 'Trace-only screenshot view' : 'San Francisco feasible area map'}>
           {status !== 'ready' && <div className={`notice ${status}`} role="status">{status === 'loading' ? 'Loading map…' : message}</div>}
           <div ref={mapNode} className="map" />
+          {traceScreenshot && <button type="button" className="trace-screenshot-exit" onClick={toggleTraceScreenshot} aria-label="Exit trace screenshot view" title="Show map again">×</button>}
           {state.mode === 'hider' && traceActive && <div className="trace-map-controls" role="toolbar" aria-label="Active path tracing controls"><span>{tracePoints.length} points · {traceDistanceMiles < 0.1 ? `${Math.round(traceDistanceMiles * 5280)} ft` : `${traceDistanceMiles.toFixed(2)} mi`}</span><button type="button" className="secondary" disabled={tracePoints.length === 0} onClick={() => setTracePoints((current) => current.slice(0, -1))}>Undo</button><button type="button" className="danger" onClick={() => setTraceActive(false)}>Finish</button></div>}
           <div className="attribution">POIs: linked SF dataset · routes/coast: DataSF · basemap © Google</div>
         </section>
