@@ -1,0 +1,10 @@
+import {describe,it,expect} from 'vitest';import * as turf from '@turf/turf';import {pois,validatePois} from './data';import {combineConstraints,constraintArea,partition} from './geometry';import {decodeState,encodeState,validateState} from './share';import type {Constraint,SharedState} from './types';
+const base=(kind:Constraint['kind']):Constraint=>({id:'x',name:'test',kind,enabled:true,answer:'yes',origin:{lat:37.77,lng:-122.44},target:{lat:37.78,lng:-122.42},distanceMiles:1,direction:'north'});
+describe('SF normalization',()=>{it('accepts only unique, bounded, stable source records',()=>{expect(validatePois()).toBe(true);expect(()=>validatePois([...pois,{...pois[0]}])).toThrow()})});
+describe.each(['radius','thermometer','direction','closer','farther','intersection','exclusion'] as const)('%s geometry',kind=>{it('produces geographic area',()=>expect(turf.area(constraintArea({...base(kind),answer:kind==='thermometer'?'colder':'yes'}))).toBeGreaterThan(0))});
+it('uses named matching regions',()=>{const rs=partition('museum'),id=Object.keys(rs)[0];expect(turf.area(constraintArea({...base('matching-region'),regionId:id},rs))).toBeGreaterThan(0)});
+it('intersects enabled constraints and ignores disabled ones',()=>{const a=base('radius'),one=turf.area(combineConstraints([a])),both=turf.area(combineConstraints([a,{...a,id:'b',origin:{lat:37.77,lng:-122.42}}]));expect(both).toBeLessThan(one);expect(turf.area(combineConstraints([{...a,enabled:false}]))).toBeGreaterThan(one)});
+it('generates one representative region per source',()=>expect(Object.keys(partition('library'))).toHaveLength(pois.filter(p=>p.category==='library').length));
+const state:SharedState={version:1,constraints:[base('radius')],layers:{museum:true},viewport:{center:{lat:37.77,lng:-122.44},zoom:12}};
+it('round trips shared state',()=>expect(decodeState(encodeState(state))).toEqual(state));
+it('rejects malformed shared configurations',()=>{expect(()=>decodeState('garbage')).toThrow();expect(()=>validateState({version:2})).toThrow()});
