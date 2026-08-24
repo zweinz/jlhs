@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as turf from '@turf/turf';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
+import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { combineConstraints, constraintArea, excludedArea, partition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer } from './hider';
 import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
@@ -245,6 +246,15 @@ it('keeps all rulebook notes attached to every primary question', () => {
     expect(QUESTION_DEFINITIONS[kind].notes.length).toBeGreaterThan(0);
     expect(QUESTION_DEFINITIONS[kind].sourceUrl).toMatch(/^https:\/\/www\.lifack\.ch\//);
   }
+});
+
+it('keeps POI partition layers mutually exclusive and allows all of them to be off', () => {
+  const off = selectPoiPartition({ museum: true, library: true });
+  expect(activePoiPartition(off)).toBeUndefined();
+  expect(VISIBLE_POI_PARTITIONS.every((category) => off[category] === false)).toBe(true);
+  const libraries = selectPoiPartition(off, 'library');
+  expect(activePoiPartition(libraries)).toBe('library');
+  expect(VISIBLE_POI_PARTITIONS.filter((category) => libraries[category])).toEqual(['library']);
 });
 
 const state: SharedState = {

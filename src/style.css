@@ -280,6 +280,32 @@ article {
   margin: .45rem 0;
 }
 .legend i { width: .8rem; height: .8rem; border-radius: 2px; }
+.partition-key {
+  max-height: 13rem;
+  margin-top: .7rem;
+  padding: .15rem .55rem;
+  overflow: auto;
+  border: 1px solid #d7dce2;
+  border-radius: .55rem;
+  background: #f8fafc;
+}
+.legend i.pin-number {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border: 1px solid white;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  color: white;
+  font-size: .62rem;
+  font-style: normal;
+  font-weight: 900;
+  text-shadow: 0 1px 2px #000a;
+}
+.legend i.pin-number span { transform: rotate(45deg); }
+.partition-key .legend { grid-template-columns: 1.5rem minmax(0, 1fr) auto; }
+.partition-key .legend a { color: #173f75; font-size: .8rem; font-weight: 700; }
 .legend a { overflow-wrap: anywhere; }
 .legend small, .source { color: #586573; }
 .source { margin-top: .9rem; font-size: .82rem; }

@@ -12,6 +12,7 @@ import {
   type PoiCategory,
 } from './data';
 import { hiderAnswer } from './hider';
+import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
 import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import {
@@ -50,7 +51,6 @@ import type { AreaDisplayMode, Constraint, Eligibility, Position, QuestionKind, 
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import './style.css';
 
-const VISIBLE_POI_PARTITIONS: PoiCategory[] = [...PARTITION_CATEGORIES, 'rail-station', 'aquarium'];
 const REGION_CATEGORIES: PoiCategory[] = [
   ...PARTITION_CATEGORIES,
   'game-valid-station',
@@ -58,7 +58,7 @@ const REGION_CATEGORIES: PoiCategory[] = [
   'aquarium',
 ];
 const initialLayers = {
-  ...Object.fromEntries(VISIBLE_POI_PARTITIONS.map((category) => [category, category === 'museum'])),
+  ...Object.fromEntries(VISIBLE_POI_PARTITIONS.map((category) => [category, false])),
   'station-zones': false,
   'transit-routes': true,
   coastline: false,
@@ -77,7 +77,6 @@ const initial: SharedState = {
   stationStatuses: {},
   routeStatuses: {},
 };
-const colors = ['#553c9a', '#007c78', '#b45309', '#be185d', '#166534', '#0369a1', '#9f1239'];
 const partitionColor = (index: number, total: number, offset = 0) =>
   `hsl(${Math.round((index * 360) / Math.max(1, total) + offset) % 360}, 62%, 39%)`;
 const measuringChoices = selectableSubjects(MEASURING_SUBJECTS);
@@ -112,7 +111,9 @@ function loadGoogleMaps(key: string) {
 function restoredState() {
   try {
     const payload = new URLSearchParams(location.search).get('config');
-    return payload ? decodeState(payload) : initial;
+    if (!payload) return initial;
+    const restored = decodeState(payload);
+    return { ...restored, layers: selectPoiPartition(restored.layers, activePoiPartition(restored.layers)) };
   } catch {
     return initial;
   }
@@ -261,6 +262,11 @@ export default function App() {
     () => Object.fromEntries(REGION_CATEGORIES.map((category) => [category, partition(category)])),
     [],
   ) as Record<PoiCategory, ReturnType<typeof partition>>;
+  const selectedPoiPartition = activePoiPartition(state.layers);
+  const selectedPartitionPois = useMemo(
+    () => selectedPoiPartition ? pois.filter((poi) => poi.category === selectedPoiPartition) : [],
+    [selectedPoiPartition],
+  );
   const regions = useMemo(() => Object.assign({}, ...Object.values(partitions)), [partitions]);
   const statusEligibleIds = useMemo(
     () => eligibleStationIds(state.stationStatuses, state.routeStatuses),
@@ -369,11 +375,21 @@ export default function App() {
     const data = new google.maps.Data({ map });
     drawn.current = data;
 
-    VISIBLE_POI_PARTITIONS.filter((category) => state.layers[category]).forEach((category) => {
-      Object.entries(partitions[category]).forEach(([id, feature], index) => {
-        data.addGeoJson({ ...feature, properties: { kind: 'region', color: colors[index % colors.length], id } });
+    if (selectedPoiPartition) {
+      selectedPartitionPois.forEach((poi, index) => {
+        const feature = partitions[selectedPoiPartition][poi.id];
+        const color = partitionColor(index, selectedPartitionPois.length);
+        if (feature) data.addGeoJson({
+          ...feature,
+          properties: { kind: 'region', color, id: poi.id, areaName: poi.name, number: index + 1 },
+        });
+        data.addGeoJson({
+          type: 'Feature',
+          properties: { kind: 'poi-source', color, id: poi.id, areaName: poi.name, number: index + 1 },
+          geometry: { type: 'Point', coordinates: [poi.lng, poi.lat] },
+        });
       });
-    });
+    }
     const geographicPartitions = [
       { key: 'supervisor-districts', collection: supervisorDistricts, offset: 15 },
       { key: 'zip-codes', collection: zipCodeAreas, offset: 210 },
@@ -437,8 +453,8 @@ export default function App() {
       const eligibilityValue = feature.getProperty('eligible');
       const routeStatus = statusValue === 'in' || statusValue === 'out' ? statusValue : undefined;
       const eligible = eligibilityValue !== false;
-      if (kind === 'feasible') return { fillColor: '#16a34a', fillOpacity: 0.28, strokeColor: '#166534', strokeWeight: 3 };
-      if (kind === 'excluded') return { fillColor: '#dc2626', fillOpacity: 0.28, strokeColor: '#991b1b', strokeWeight: 2 };
+      if (kind === 'feasible') return { fillColor: '#16a34a', fillOpacity: 0.28, strokeColor: '#166534', strokeWeight: 3, zIndex: 1 };
+      if (kind === 'excluded') return { fillColor: '#dc2626', fillOpacity: 0.28, strokeColor: '#991b1b', strokeWeight: 2, zIndex: 1 };
       if (kind === 'coastline') return { strokeColor: '#0284c7', strokeWeight: 4, fillOpacity: 0 };
       if (kind === 'hider-trace') return { strokeColor: '#e11d48', strokeOpacity: 0.95, strokeWeight: 5, zIndex: 20 };
       if (kind === 'trace-point') {
@@ -471,9 +487,23 @@ export default function App() {
           },
         };
       }
+      if (kind === 'poi-source') {
+        const colorValue = feature.getProperty('color');
+        const color = typeof colorValue === 'string' ? colorValue : '#553c9a';
+        const number = Number(feature.getProperty('number')) || 0;
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="42" viewBox="0 0 34 42"><path d="M17 1C8.2 1 1 8.2 1 17c0 11.2 16 24 16 24s16-12.8 16-24C33 8.2 25.8 1 17 1Z" fill="${color}" stroke="white" stroke-width="2"/><circle cx="17" cy="17" r="10.5" fill="white" fill-opacity=".94"/><text x="17" y="21" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="700" fill="#111827">${number}</text></svg>`;
+        return {
+          icon: {
+            url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+            scaledSize: new google.maps.Size(30, 37),
+            anchor: new google.maps.Point(15, 36),
+          },
+          zIndex: 30,
+        };
+      }
       const colorValue = feature.getProperty('color');
       const regionColor = typeof colorValue === 'string' ? colorValue : '#553c9a';
-      return { fillColor: regionColor, fillOpacity: kind === 'geographic-region' ? 0.07 : 0.12, strokeColor: regionColor, strokeWeight: kind === 'geographic-region' ? 2 : 1 };
+      return { fillColor: regionColor, fillOpacity: kind === 'geographic-region' ? 0.07 : 0.14, strokeColor: regionColor, strokeWeight: kind === 'geographic-region' ? 2 : 1.5, zIndex: kind === 'region' ? 4 : 2 };
     });
     data.addListener('click', (event: google.maps.Data.MouseEvent) => {
       if (traceActive && event.latLng) {
@@ -484,7 +514,7 @@ export default function App() {
       const areaName = event.feature.getProperty('areaName');
       if (typeof areaName === 'string') setMessage(areaName);
     });
-  }, [eligibleIds, excluded, feasible, partitions, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status, traceActive, tracePoints, traceScreenshot]);
+  }, [eligibleIds, excluded, feasible, partitions, selectedPartitionPois, selectedPoiPartition, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
@@ -677,11 +707,9 @@ export default function App() {
 
           <details className="panel">
             <summary>POI partition layers</summary>
-            <div className="toggle-grid">
-              {VISIBLE_POI_PARTITIONS.map((category) => (
-                <label className="toggle" key={category}><input type="checkbox" checked={!!state.layers[category]} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, [category]: event.target.checked } }))} />{CATEGORY_LABELS[category]}</label>
-              ))}
-            </div>
+            <label className="stacked">Displayed partition<select aria-label="POI partition layer" value={selectedPoiPartition ?? ''} onChange={(event) => setState((current) => ({ ...current, layers: selectPoiPartition(current.layers, (event.target.value || undefined) as PoiCategory | undefined) }))}><option value="">Off</option>{VISIBLE_POI_PARTITIONS.map((category) => <option key={category} value={category}>{CATEGORY_LABELS[category]}</option>)}</select></label>
+            <p className="helper">Only one POI partition is shown at a time. Numbered pins mark the source POIs; tap a pin or colored region to identify it.</p>
+            {selectedPoiPartition && <div className="partition-key" role="list" aria-label={`${CATEGORY_LABELS[selectedPoiPartition]} map pin key`}>{selectedPartitionPois.map((poi, index) => <div className="legend" role="listitem" key={poi.id}><i className="pin-number" style={{ background: partitionColor(index, selectedPartitionPois.length) }}><span>{index + 1}</span></i><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>)}</div>}
           </details>
 
           <section className="questions">
@@ -748,7 +776,6 @@ export default function App() {
             {state.layers['supervisor-districts'] && supervisorDistricts.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, supervisorDistricts.features.length, 15) }} /><span>{feature.properties.name}</span><small>DataSF</small></div>)}
             {state.layers['zip-codes'] && zipCodeAreas.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, zipCodeAreas.features.length, 210) }} /><span>{feature.properties.name}</span><small>ZIP</small></div>)}
             {state.layers.landmasses && sfLandmasses.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, sfLandmasses.features.length, 35) }} /><span>{feature.properties.name}</span><small>SF rule</small></div>)}
-            {VISIBLE_POI_PARTITIONS.filter((category) => state.layers[category]).flatMap((category) => pois.filter((poi) => poi.category === category).map((poi, index) => <div className="legend" key={poi.id}><i style={{ background: colors[index % colors.length] }} /><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>))}
           </details>
         </aside>
         <section className={`map-wrap${traceScreenshot ? ' trace-screenshot' : ''}`} aria-label={traceScreenshot ? 'Trace-only screenshot view' : 'San Francisco feasible area map'}>
