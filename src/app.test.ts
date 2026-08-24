@@ -4,7 +4,7 @@ import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { combineConstraints, constraintArea, excludedArea, partition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer } from './hider';
-import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
+import { orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
@@ -246,6 +246,12 @@ it('keeps all rulebook notes attached to every primary question', () => {
     expect(QUESTION_DEFINITIONS[kind].notes.length).toBeGreaterThan(0);
     expect(QUESTION_DEFINITIONS[kind].sourceUrl).toMatch(/^https:\/\/www\.lifack\.ch\//);
   }
+});
+
+it('shows card-specific photo notes before general photo notes', () => {
+  const cardNote = PHOTO_SUBJECTS[0].notes[0];
+  expect(orderedRuleNotes('photo-reference', QUESTION_DEFINITIONS['photo-reference'].notes, [cardNote])[0]).toBe(cardNote);
+  expect(orderedRuleNotes('matching-region', ['general'], ['subject'])).toEqual(['general', 'subject']);
 });
 
 it('keeps POI partition layers mutually exclusive and allows all of them to be off', () => {

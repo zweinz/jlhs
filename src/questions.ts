@@ -135,3 +135,11 @@ export const PRIMARY_QUESTION_KINDS: QuestionKind[] = [
   'tentacle',
   'photo-reference',
 ];
+
+export const orderedRuleNotes = (
+  kind: QuestionKind,
+  questionNotes: string[],
+  subjectNotes: string[] = [],
+) => kind === 'photo-reference'
+  ? [...subjectNotes, ...questionNotes]
+  : [...questionNotes, ...subjectNotes];
