@@ -1,0 +1,15 @@
+{
+  "provenance":{"spreadsheetId":"1VyhjPUGxNSybxBV7yFSEECI9sKcdJOME2TpFpAaXpok","gid":"252568279","retrieved":"2026-08-24","sourceUrl":"https://docs.google.com/spreadsheets/d/1VyhjPUGxNSybxBV7yFSEECI9sKcdJOME2TpFpAaXpok/edit#gid=252568279","normalization":"trim names; lowercase category; numeric WGS84 coordinates; stable id sf:<category>:<slug>"},
+  "pois":[
+    {"id":"sf:museum:asian-art-museum","name":"Asian Art Museum","category":"museum","lat":37.7802,"lng":-122.4162,"sourceRow":2},
+    {"id":"sf:museum:de-young-museum","name":"de Young Museum","category":"museum","lat":37.7715,"lng":-122.4687,"sourceRow":3},
+    {"id":"sf:museum:exploratorium","name":"Exploratorium","category":"museum","lat":37.8017,"lng":-122.3973,"sourceRow":4},
+    {"id":"sf:museum:sfmoma","name":"SFMOMA","category":"museum","lat":37.7857,"lng":-122.4011,"sourceRow":5},
+    {"id":"sf:museum:california-academy-of-sciences","name":"California Academy of Sciences","category":"museum","lat":37.7699,"lng":-122.4661,"sourceRow":6},
+    {"id":"sf:library:main-library","name":"Main Library","category":"library","lat":37.7793,"lng":-122.4158,"sourceRow":7},
+    {"id":"sf:library:mission-branch","name":"Mission Branch Library","category":"library","lat":37.7524,"lng":-122.4183,"sourceRow":8},
+    {"id":"sf:library:richmond-branch","name":"Richmond Branch Library","category":"library","lat":37.7818,"lng":-122.4680,"sourceRow":9},
+    {"id":"sf:library:potrero-branch","name":"Potrero Branch Library","category":"library","lat":37.7563,"lng":-122.4013,"sourceRow":10},
+    {"id":"sf:library:bayview-branch","name":"Bayview Branch Library","category":"library","lat":37.7314,"lng":-122.3813,"sourceRow":11}
+  ]
+}
