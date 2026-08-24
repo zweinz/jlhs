@@ -14,6 +14,22 @@ import {
 import { hiderAnswer } from './hider';
 import { googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
 import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
+import {
+  MATCHING_SUBJECTS,
+  MEASURING_SUBJECTS,
+  PHOTO_SUBJECTS,
+  selectableSubjects,
+  type RulebookSubject,
+} from './rulebook';
+import {
+  districtAt,
+  elevationProvenance,
+  landmassAt,
+  nearestStreet,
+  normalizedStationNameLength,
+  rulebookAreaProvenance,
+  streetProvenance,
+} from './rulebookGeometry';
 import { decodeState, encodeState } from './share';
 import {
   coastline,
@@ -55,12 +71,9 @@ const initial: SharedState = {
   routeStatuses: {},
 };
 const colors = ['#553c9a', '#007c78', '#b45309', '#be185d', '#166534', '#0369a1', '#9f1239'];
-const categoryOptions: PoiCategory[] = [
-  ...PARTITION_CATEGORIES,
-  'rail-station',
-  'game-valid-station',
-  'aquarium',
-];
+const measuringChoices = selectableSubjects(MEASURING_SUBJECTS);
+const matchingChoices = selectableSubjects(MATCHING_SUBJECTS);
+const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
 
 let googleMapsPromise: Promise<typeof google.maps> | null = null;
 
@@ -156,10 +169,27 @@ function answerOptions(kind: QuestionKind) {
   return ['yes', 'no'];
 }
 
-function defaultCategory(kind: QuestionKind): PoiCategory | undefined {
+function defaultCategory(kind: QuestionKind): string | undefined {
   if (kind === 'measuring') return 'rail-station';
   if (kind === 'matching-region' || kind === 'tentacle') return 'museum';
+  if (kind === 'photo-reference') return 'a-tree';
   return undefined;
+}
+
+const tentacleSubjects: RulebookSubject[] = TENTACLE_CATEGORIES.map((id) => ({
+  id,
+  label: id === 'transit-route' ? 'Metro line' : CATEGORY_LABELS[id as PoiCategory],
+  status: 'in-play',
+  support: id === 'transit-route' ? 'approximate' : 'exact',
+  notes: [id === 'transit-route' || id === 'aquarium' ? 'Large-game card: 15-mile reach.' : 'Medium/large-game card: 1-mile reach.'],
+}));
+
+function subjectChoices(kind: QuestionKind) {
+  if (kind === 'measuring') return measuringChoices;
+  if (kind === 'matching-region') return matchingChoices;
+  if (kind === 'tentacle') return tentacleSubjects;
+  if (kind === 'photo-reference') return photoChoices;
+  return [];
 }
 
 function defaultAnswer(kind: QuestionKind): Constraint['answer'] {
@@ -359,7 +389,7 @@ export default function App() {
           answer: defaultAnswer(kind),
           origin,
           target: { lat: 37.7857, lng: -122.4011 },
-          distanceMiles: kind === 'tentacle' ? 1 : kind === 'thermometer' ? 3 : 1,
+          distanceMiles: kind === 'tentacle' ? 1 : kind === 'thermometer' ? 3 : kind === 'radar' ? 0.25 : 1,
           direction: 'north',
           category,
           regionId,
@@ -505,20 +535,27 @@ export default function App() {
             {state.constraints.length === 0 && <p className="empty-state">Add a question, then paste the Google Maps links the players shared.</p>}
             {state.constraints.map((constraint) => {
               const definition = QUESTION_DEFINITIONS[constraint.kind];
-              const usesOrigin = !['coastline', 'photo-reference'].includes(constraint.kind) && !(constraint.kind === 'matching-region' && constraint.category === 'transit-route');
+              const usesOrigin = constraint.kind !== 'photo-reference' && !(constraint.kind === 'matching-region' && constraint.category === 'transit-route');
               const usesTarget = ['thermometer', 'closer', 'farther'].includes(constraint.kind);
-              const usesDistance = ['radar', 'radius', 'tentacle', 'closer', 'farther', 'intersection', 'exclusion'].includes(constraint.kind) || (constraint.kind === 'matching-region' && constraint.category === 'transit-route');
-              const usesCategory = ['matching-region', 'measuring', 'tentacle'].includes(constraint.kind);
-              const category = constraint.category as PoiCategory | 'transit-route' | undefined;
-              const categoryChoices = constraint.kind === 'tentacle'
-                ? TENTACLE_CATEGORIES
-                : constraint.kind === 'matching-region'
-                  ? [...categoryOptions, 'transit-route']
-                  : categoryOptions;
+              const usesDistance = ['radar', 'thermometer', 'radius', 'tentacle', 'closer', 'farther', 'intersection', 'exclusion'].includes(constraint.kind) || (constraint.kind === 'matching-region' && constraint.category === 'transit-route');
+              const usesCategory = ['matching-region', 'measuring', 'tentacle', 'photo-reference'].includes(constraint.kind);
+              const category = constraint.category;
+              const categoryChoices = subjectChoices(constraint.kind);
+              const selectedSubject = categoryChoices.find((subject) => subject.id === category);
               const tentacleChoices = constraint.kind === 'tentacle' && category !== 'transit-route'
                 ? pois.filter((poi) => poi.category === category && turf.distance([constraint.origin.lng, constraint.origin.lat], [poi.lng, poi.lat], { units: 'miles' }) <= (constraint.distanceMiles ?? 1))
                 : [];
               const sourcePoi = constraint.regionId ? pois.find((poi) => poi.id === constraint.regionId) : undefined;
+              const matchingSource = constraint.kind !== 'matching-region' ? undefined
+                : category === 'station-name-length'
+                  ? (() => { const station = nearestPoi('game-valid-station', constraint.origin); return station ? `${station.name} · ${normalizedStationNameLength(station.name)} characters` : undefined; })()
+                  : category === 'street-path'
+                    ? nearestStreet(constraint.origin)
+                    : category === 'supervisor-district'
+                      ? districtAt(constraint.origin)?.properties.name
+                      : category === 'landmass'
+                        ? landmassAt(constraint.origin)?.properties.name
+                        : sourcePoi?.name;
               return (
                 <article key={constraint.id}>
                   <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
@@ -526,16 +563,16 @@ export default function App() {
                   {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition ? '' : 'waiting'}`}><span>Hider answer</span><strong>{state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
                   <div className="control-grid">
                     {constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
-                    {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
+                    {usesDistance && (constraint.kind === 'thermometer' ? <label>Miles<select aria-label={`${constraint.name} distance in miles`} value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })}>{[0.5, 3, 10, 50].map((miles) => <option key={miles} value={miles}>{miles}</option>)}</select></label> : <label>Miles<input aria-label={`${constraint.name} distance in miles`} type="number" min="0.05" step={constraint.kind === 'radar' ? 0.25 : 0.05} value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>)}
                     {constraint.kind === 'direction' && <label>Direction<select value={constraint.direction} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'south', 'east', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
-                    {usesCategory && <label className="wide">Category<select value={category} onChange={(event) => { const nextCategory = event.target.value as PoiCategory | 'transit-route'; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? transitRoutes[0]?.id : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : constraint.distanceMiles }); }}>{categoryChoices.map((item) => <option key={item} value={item}>{item === 'transit-route' ? 'Transit routes / metro lines' : CATEGORY_LABELS[item as PoiCategory]}</option>)}</select></label>}
+                    {usesCategory && <label className="wide">Subject<select value={category} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? transitRoutes[0]?.id : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}{item.status === 'experimental' ? ' · homebrew' : ''}</option>)}</select></label>}
                     {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s transit service<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{transitRoutes.map((route) => <option key={route.id} value={route.id}>{route.id} — {route.mode === 'light-rail' ? 'light rail' : 'Rapid Muni'}</option>)}</select></label>}
                     {constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? transitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
-                  {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s nearest: <b>{sourcePoi?.name ?? 'set the seeker pin'}</b></p>}
+                  {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{matchingSource ?? 'set the seeker pin'}</b></p>}
                   {usesOrigin && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
                   {usesTarget && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
-                  <div className="rule-notes"><h3>Rulebook notes</h3><ul>{definition.notes.map((note) => <li key={note}>{note}</li>)}</ul>{(definition.reward || definition.timeLimit) && <p>{definition.reward && <span><b>Reward:</b> {definition.reward}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</div>
+                  <div className="rule-notes"><h3>Rulebook notes</h3>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate map support' : selectedSubject.status === 'experimental' ? 'Experimental homebrew' : selectedSubject.support === 'reference' ? 'Reference card' : 'Mapped exactly'}</b></p>}<ul>{[...definition.notes, ...(selectedSubject?.notes ?? [])].map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</div>
                   <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>
                 </article>
               );
@@ -547,7 +584,9 @@ export default function App() {
             <div className="legend-key"><span className="rail" />Light rail <span className="rapid" />Rapid Muni <span className="eligible" />Eligible station <span className="cut" />Cut station/route</div>
             <p className="source">{provenance.totalPois.toLocaleString()} normalized POIs from <a href={provenance.sourceUrl}>the SF spreadsheet</a> · retrieved {provenance.retrieved}</p>
             <p className="source">Routes: <a href={transitProvenance.sourceUrl}>DataSF Muni Simple Routes</a> · coastline: <a href={coastlineProvenance.sourceUrl}>DataSF SF Shoreline and Islands</a>.</p>
-            <p className="source">Interactive map coverage: radar, thermometer, measuring, coastline, matching, tentacles, station zones, and transit eligibility. Photo cards are retained as reference because they do not determine a polygon. Hiding-spot access and safety remain player judgments.</p>
+            <p className="source">Districts/water: <a href={rulebookAreaProvenance.districts.sourceUrl}>DataSF districts</a> / <a href={rulebookAreaProvenance.water.sourceUrl}>water bodies</a> · streets: <a href={streetProvenance.sourceUrl}>DataSF centerlines</a> · elevation: <a href={elevationProvenance.sourceUrl}>Mapzen terrain tiles</a>.</p>
+            <p className="source">Interactive map coverage includes all in-play SF matching and measuring subjects. Approximate cards are labeled in their question notes. Photo cards are retained as reference because they do not determine a polygon. The map does not certify a final hiding spot: players must still confirm it is publicly accessible during game hours, safe, and within 10 feet of a marked path/road that the map app will use for walking directions.</p>
+            {([['Matching', MATCHING_SUBJECTS], ['Measuring', MEASURING_SUBJECTS], ['Photos', PHOTO_SUBJECTS]] as const).map(([group, subjects]) => <details className="coverage-group" key={group}><summary>{group} deck audit · {subjects.filter((subject) => subject.status === 'in-play').length} in play</summary>{subjects.map((subject) => <p key={subject.id}><b>{subject.label}</b> · {subject.status === 'out-of-play' ? 'out of SF deck' : subject.status === 'experimental' ? 'experimental homebrew' : subject.support}</p>)}</details>)}
             {PARTITION_CATEGORIES.filter((category) => state.layers[category]).flatMap((category) => pois.filter((poi) => poi.category === category).map((poi, index) => <div className="legend" key={poi.id}><i style={{ background: colors[index % colors.length] }} /><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>))}
           </details>
         </aside>

@@ -172,6 +172,10 @@ article {
 .rule-notes ul { margin: 0; padding-left: 1.1rem; }
 .rule-notes li + li { margin-top: .25rem; }
 .rule-notes p { display: grid; gap: .1rem; margin: .5rem 0; }
+.rule-notes .support-line { display: block; color: #075e9d; }
+.coverage-group { margin-top: .65rem; border-top: 1px solid #d8dee5; padding-top: .45rem; }
+.coverage-group summary { min-height: 36px; font-size: .82rem; }
+.coverage-group p { margin: .25rem 0; color: #586573; font-size: .74rem; }
 
 .notice {
   position: absolute;

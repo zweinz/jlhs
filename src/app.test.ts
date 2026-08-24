@@ -4,6 +4,8 @@ import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { combineConstraints, constraintArea, partition, stationZoneArea } from './geometry';
 import { hiderAnswer } from './hider';
 import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
+import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
+import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance } from './rulebookGeometry';
 import { decodeState, encodeState, validateState } from './share';
 import { eligibleStationIds, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
@@ -57,6 +59,66 @@ it('uses named matching regions', () => {
   const regions = partition('museum');
   const id = Object.keys(regions)[0];
   expect(turf.area(constraintArea({ ...base('matching-region'), regionId: id }, regions))).toBeGreaterThan(0);
+});
+
+describe('SF rulebook audit', () => {
+  it('uses the exact question draw/pick costs without inventing rewards', () => {
+    expect(QUESTION_DEFINITIONS.tentacle.drawInstruction).toBe('Draw 4, keep 2');
+    expect(QUESTION_DEFINITIONS.measuring.drawInstruction).toBe('Draw 3, keep 1');
+    expect(QUESTION_DEFINITIONS['matching-region'].drawInstruction).toBe('Draw 3, keep 1');
+    expect(QUESTION_DEFINITIONS.radar.drawInstruction).toBe('Draw 2, keep 1');
+    expect(QUESTION_DEFINITIONS['photo-reference'].drawInstruction).toBe('Draw 1, keep 1');
+    expect(Object.values(QUESTION_DEFINITIONS).every((definition) => !('reward' in definition))).toBe(true);
+  });
+
+  it('catalogs the complete investigation-book inventories and SF decisions', () => {
+    expect(MATCHING_SUBJECTS.filter((subject) => !subject.label.includes('homebrew'))).toHaveLength(20);
+    expect(MEASURING_SUBJECTS.filter((subject) => !subject.label.includes('homebrew'))).toHaveLength(20);
+    expect(PHOTO_SUBJECTS.filter((subject) => subject.status !== 'experimental')).toHaveLength(18);
+    expect(MATCHING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('out-of-play');
+    expect(MEASURING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('in-play');
+    expect(selectableSubjects(MEASURING_SUBJECTS).some((subject) => subject.id === 'sea-level')).toBe(true);
+    expect([...MATCHING_SUBJECTS, ...MEASURING_SUBJECTS].filter((subject) => subject.status === 'in-play').every((subject) => subject.support !== 'not-mapped')).toBe(true);
+  });
+
+  it('includes the twelve SF small-game photo cards with their card-specific instructions', () => {
+    const sfPhotos = PHOTO_SUBJECTS.filter((subject) => subject.status === 'in-play');
+    expect(sfPhotos).toHaveLength(12);
+    expect(sfPhotos.every((subject) => subject.notes.length > 0)).toBe(true);
+    expect(sfPhotos.find((subject) => subject.id === 'restaurant-interior')?.notes.join(' ')).toMatch(/window/i);
+  });
+});
+
+describe('missing measuring and matching geometry', () => {
+  it('models sea-level, named water, and seeker-pin coastline comparisons', () => {
+    const sea = constraintArea({ ...base('measuring'), category: 'sea-level', answer: 'closer' });
+    const water = constraintArea({ ...base('measuring'), category: 'body-of-water', answer: 'closer' });
+    const coastWest = constraintArea({ ...base('measuring'), category: 'coastline', origin: { lat: 37.76, lng: -122.50 }, answer: 'closer' });
+    const coastCenter = constraintArea({ ...base('measuring'), category: 'coastline', origin: { lat: 37.76, lng: -122.44 }, answer: 'closer' });
+    expect(turf.area(sea)).toBeGreaterThan(0);
+    expect(turf.area(water)).toBeGreaterThan(0);
+    expect(Math.abs(turf.area(coastWest) - turf.area(coastCenter))).toBeGreaterThan(1000);
+    expect(elevationAt({ lat: 37.75, lng: -122.45 })).toBeTypeOf('number');
+    expect(nearestWaterDistance({ lat: 37.75, lng: -122.45 })).toBeGreaterThanOrEqual(0);
+  });
+
+  it('models name-length, street, district, and landmass matching', () => {
+    const stationRegions = partition('game-valid-station');
+    for (const category of ['station-name-length', 'street-path', 'supervisor-district', 'landmass']) {
+      expect(turf.area(constraintArea({ ...base('matching-region'), category }, stationRegions))).toBeGreaterThan(0);
+    }
+    expect(nearestStreet(base('radar').origin)).toBeTruthy();
+    expect(districtAt(base('radar').origin)?.properties.name).toMatch(/District/);
+    expect(landmassAt(base('radar').origin)?.properties.name).toBeTruthy();
+  });
+
+  it('answers the added subjects in hider mode', () => {
+    const hider = { lat: 37.76, lng: -122.45 };
+    expect(hiderAnswer({ ...base('measuring'), category: 'sea-level' }, hider, {})).toMatch(/Closer|Farther/);
+    expect(hiderAnswer({ ...base('measuring'), category: 'body-of-water' }, hider, {})).toMatch(/Closer|Farther/);
+    expect(hiderAnswer({ ...base('matching-region'), category: 'street-path' }, hider, {})).toMatch(/Yes|No/);
+    expect(hiderAnswer({ ...base('matching-region'), category: 'supervisor-district' }, hider, {})).toMatch(/Yes|No/);
+  });
 });
 
 it('models named and not-within-reach tentacle answers', () => {

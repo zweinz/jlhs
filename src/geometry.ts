@@ -3,6 +3,15 @@ import type { Feature, Polygon } from 'geojson';
 import type { Area, Constraint, Position } from './types';
 import { pois, SF_BOUNDS, SF_CENTER, type PoiCategory } from './data';
 import { coastline, distanceToRoute, nearestCoastlineDistance, routesForStation, transitRoutes, validStations } from './transit';
+import {
+  districtAt,
+  elevationComparisonArea,
+  landmassAt,
+  nearestStreet,
+  normalizedStationNameLength,
+  streetArea,
+  waterDistanceArea,
+} from './rulebookGeometry';
 
 const frame = () =>
   turf.bboxPolygon([SF_BOUNDS.west, SF_BOUNDS.south, SF_BOUNDS.east, SF_BOUNDS.north]) as Area;
@@ -122,11 +131,18 @@ export function constraintArea(constraint: Constraint, regions: Record<string, A
     );
   }
   if (constraint.kind === 'measuring') {
-    const closerArea = categoryDistanceArea(constraint.category ?? 'rail-station', constraint.origin);
+    const category = constraint.category ?? 'rail-station';
+    const closerArea = category === 'sea-level'
+      ? elevationComparisonArea(constraint.origin)
+      : category === 'body-of-water'
+        ? waterDistanceArea(constraint.origin)
+        : category === 'coastline'
+          ? clipToFrame(turf.buffer(coastline, nearestCoastlineDistance(constraint.origin), { units: 'miles', steps: 24 }) as Area)
+          : categoryDistanceArea(category, constraint.origin);
     return constraint.answer === 'farther' ? invert(closerArea) : closerArea;
   }
   if (constraint.kind === 'coastline') {
-    const threshold = nearestCoastlineDistance(SF_CENTER);
+    const threshold = nearestCoastlineDistance(constraint.origin);
     const closerArea = clipToFrame(
       turf.buffer(coastline, threshold, { units: 'miles', steps: 24 }) as Area,
     );
@@ -134,12 +150,33 @@ export function constraintArea(constraint: Constraint, regions: Record<string, A
   }
   if (constraint.kind === 'tentacle') return tentacleArea(constraint, regions);
   if (constraint.kind === 'matching-region') {
+    const matchingAnswer = (area: Area) => constraint.answer === 'no' ? invert(area) : area;
     if (constraint.category === 'transit-route') {
       const stationIds = validStations
         .filter((station) => routesForStation(station.id).includes(constraint.regionId ?? ''))
         .map((station) => station.id);
       const routeStations = stationZoneArea(stationIds, constraint.distanceMiles ?? 0.25);
       return constraint.answer === 'no' ? invert(routeStations) : routeStations;
+    }
+    if (constraint.category === 'station-name-length') {
+      const source = nearestPoi('game-valid-station', constraint.origin);
+      if (!source) return empty();
+      const sourceLength = normalizedStationNameLength(source.name);
+      return matchingAnswer(unionAreas(
+        validStations
+          .filter((station) => normalizedStationNameLength(station.name) === sourceLength)
+          .map((station) => regions[station.id])
+          .filter((area): area is Area => Boolean(area)),
+      ));
+    }
+    if (constraint.category === 'street-path') return matchingAnswer(streetArea(nearestStreet(constraint.origin)));
+    if (constraint.category === 'supervisor-district') {
+      const district = districtAt(constraint.origin);
+      return district ? matchingAnswer(district as Area) : empty();
+    }
+    if (constraint.category === 'landmass') {
+      const landmass = landmassAt(constraint.origin);
+      return landmass ? matchingAnswer(landmass as Area) : empty();
     }
     const regionId = constraint.regionId ?? nearestPoi(constraint.category ?? 'museum', constraint.origin)?.id;
     const region = regions[regionId ?? ''];

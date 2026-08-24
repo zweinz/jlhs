@@ -3,6 +3,8 @@ import * as turf from '@turf/turf';
 
 const routesSource = JSON.parse(fs.readFileSync('/private/tmp/muni-simple-routes.geojson', 'utf8'));
 const shorelineSource = JSON.parse(fs.readFileSync('/private/tmp/sf-shoreline.geojson', 'utf8'));
+const districtsSource = JSON.parse(fs.readFileSync('/private/tmp/sf-districts.geojson', 'utf8'));
+const waterSource = JSON.parse(fs.readFileSync('/private/tmp/sf-water.geojson', 'utf8'));
 
 const railLines = new Set(['F', 'J', 'K', 'L', 'M', 'N', 'T']);
 const routeFeatures = routesSource.features
@@ -46,6 +48,46 @@ if (current.length > 1) kept.push(current);
 // The rulebook explicitly treats coastline precision as approximate; ~35 m simplification keeps mobile buffering fast.
 const coastline = turf.simplify(turf.multiLineString(kept), { tolerance: 0.00032, highQuality: true });
 
+const districts = districtsSource.features.map((feature) => ({
+  ...turf.simplify(feature, { tolerance: 0.00008, highQuality: true }),
+  properties: { id: `district-${feature.properties.sup_dist}`, name: `District ${feature.properties.sup_dist}` },
+}));
+
+const waters = waterSource.features.map((feature) => ({
+  ...turf.simplify(feature, { tolerance: 0.00006, highQuality: true }),
+  properties: {
+    id: `water-${feature.properties.objectid}`,
+    name: feature.properties.body_name || `Unnamed ${feature.properties.body_type.toLowerCase()}`,
+    type: feature.properties.body_type,
+  },
+}));
+
+const treasureIsland = flattened
+  .filter((feature) => {
+    const [lng, lat] = turf.centroid(feature).geometry.coordinates;
+    return lng > -122.39 && lng < -122.34 && lat > 37.79 && lat < 37.84;
+  })
+  .reduce((largest, candidate) => (!largest || turf.area(candidate) > turf.area(largest) ? candidate : largest), null);
+const stowLake = waterSource.features.find((feature) => /stow|blue heron/i.test(feature.properties.body_name));
+const strawberryRing = stowLake.geometry.coordinates[0]
+  .slice(1)
+  .reduce((largest, candidate) =>
+    turf.area(turf.polygon([candidate])) > turf.area(turf.polygon([largest])) ? candidate : largest,
+  );
+const strawberryHill = turf.polygon([strawberryRing]);
+const mapFrame = turf.bboxPolygon([-122.53, 37.7, -122.35, 37.84]);
+const everythingElse = turf.difference(
+  turf.featureCollection([
+    turf.difference(turf.featureCollection([mapFrame, treasureIsland])),
+    strawberryHill,
+  ]),
+);
+const landmasses = [
+  { ...turf.simplify(treasureIsland, { tolerance: 0.00008, highQuality: true }), properties: { id: 'landmass-treasure-island', name: 'Treasure Island' } },
+  { ...turf.simplify(strawberryHill, { tolerance: 0.00003, highQuality: true }), properties: { id: 'landmass-strawberry-hill', name: 'Strawberry Hill' } },
+  { ...everythingElse, properties: { id: 'landmass-mainland', name: 'Everything else in San Francisco' } },
+];
+
 fs.writeFileSync(
   'src/data/transit-routes.json',
   `${JSON.stringify({
@@ -58,6 +100,33 @@ fs.writeFileSync(
       scope: 'Current light-rail and Rapid Muni lines (inbound and outbound patterns)',
     },
     features: routeFeatures,
+  })}\n`,
+);
+
+fs.writeFileSync(
+  'src/data/rulebook-areas.json',
+  `${JSON.stringify({
+    provenance: {
+      districts: {
+        dataset: 'Current Supervisor Districts',
+        sourceUrl: 'https://data.sfgov.org/d/cqbw-m5m3',
+        retrieved: '2026-08-24',
+        license: 'Open Data Commons Public Domain Dedication and License',
+      },
+      water: {
+        dataset: 'Water bodies',
+        sourceUrl: 'https://data.sfgov.org/d/j829-i3ix',
+        retrieved: '2026-08-24',
+        license: 'Open Data Commons Public Domain Dedication and License',
+      },
+      landmasses: {
+        source: 'SF Shoreline and Islands plus the Stow Lake island ring',
+        note: 'SF-modified landmasses: Treasure Island, Strawberry Hill, and everything else',
+      },
+    },
+    districts: { type: 'FeatureCollection', features: districts },
+    waters: { type: 'FeatureCollection', features: waters },
+    landmasses: { type: 'FeatureCollection', features: landmasses },
   })}\n`,
 );
 
