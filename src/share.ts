@@ -1,5 +1,5 @@
 import { SF_BOUNDS } from './data';
-import type { Constraint, Position, SharedState } from './types';
+import type { AreaDisplayMode, Constraint, Position, SharedState } from './types';
 
 const kinds = new Set([
   'radar',
@@ -44,6 +44,7 @@ function validGoogleMapsUrl(value: unknown) {
 export function validateState(value: unknown): SharedState {
   if (!value || typeof value !== 'object') throw Error('Configuration is not an object');
   const state = value as SharedState;
+  const areaDisplayMode = (state.areaDisplayMode ?? 'allowed-green') as AreaDisplayMode;
   if (
     state.version !== 2 ||
     !Array.isArray(state.constraints) ||
@@ -60,6 +61,7 @@ export function validateState(value: unknown): SharedState {
   ) {
     throw Error('Unsupported or incomplete configuration');
   }
+  if (!['allowed-green', 'excluded-red'].includes(areaDisplayMode)) throw Error('Invalid area display mode');
   if (!validPosition(state.viewport.center) || !Number.isFinite(state.viewport.zoom) || state.viewport.zoom < 8 || state.viewport.zoom > 22) {
     throw Error('Invalid viewport');
   }
@@ -93,7 +95,7 @@ export function validateState(value: unknown): SharedState {
       throw Error('Invalid constraint');
     }
   }
-  return state;
+  return { ...state, areaDisplayMode };
 }
 
 function migrate(value: unknown) {
@@ -105,6 +107,7 @@ function migrate(value: unknown) {
     version: 2,
     mode: 'seeker',
     stationZoneMiles: 0.25,
+    areaDisplayMode: 'allowed-green',
     stationStatuses: {},
     routeStatuses: {},
   };

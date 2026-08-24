@@ -18,7 +18,8 @@ const frame = () =>
   turf.bboxPolygon([SF_BOUNDS.west, SF_BOUNDS.south, SF_BOUNDS.east, SF_BOUNDS.north]) as Area;
 const point = (position: Position) => turf.point([position.lng, position.lat]);
 const empty = (): Area => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [] } });
-const invert = (area: Area) => (turf.difference(turf.featureCollection([frame(), area])) as Area | null) ?? empty();
+export const excludedArea = (area: Area) => (turf.difference(turf.featureCollection([frame(), area])) as Area | null) ?? empty();
+const invert = excludedArea;
 const clipToFrame = (area: Area) =>
   (turf.intersect(turf.featureCollection([frame(), area])) as Area | null) ?? empty();
 

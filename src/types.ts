@@ -33,6 +33,7 @@ export interface Constraint {
   category?: string;
 }
 export type Area = Feature<Polygon | MultiPolygon>;
+export type AreaDisplayMode = 'allowed-green' | 'excluded-red';
 export interface SharedState {
   version: 2;
   constraints: Constraint[];
@@ -42,6 +43,7 @@ export interface SharedState {
   hiderPosition?: Position;
   hiderMapUrl?: string;
   stationZoneMiles: number;
+  areaDisplayMode: AreaDisplayMode;
   stationStatuses: Record<string, Eligibility>;
   routeStatuses: Record<string, Eligibility>;
 }

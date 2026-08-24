@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as turf from '@turf/turf';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
-import { combineConstraints, constraintArea, partition, stationIdsOverlappingArea, stationZoneArea } from './geometry';
+import { combineConstraints, constraintArea, excludedArea, partition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer } from './hider';
 import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
@@ -194,6 +194,13 @@ it('intersects enabled constraints and ignores disabled ones', () => {
   expect(turf.area(combineConstraints([{ ...first, enabled: false }]))).toBeGreaterThan(one);
 });
 
+it('creates the inverse red-shading area outside the feasible polygon', () => {
+  const feasible = combineConstraints([base('radar')]);
+  const excluded = excludedArea(feasible);
+  expect(turf.area(excluded)).toBeGreaterThan(0);
+  expect(turf.area(feasible) + turf.area(excluded)).toBeCloseTo(turf.area(sfFrame()), -1);
+});
+
 it.each(PARTITION_CATEGORIES)('generates one %s region per source POI', (category) => {
   expect(Object.keys(partition(category))).toHaveLength(pois.filter((poi) => poi.category === category).length);
 });
@@ -247,15 +254,20 @@ const state: SharedState = {
   viewport: { center: { lat: 37.77, lng: -122.44 }, zoom: 12 },
   mode: 'seeker',
   stationZoneMiles: 0.25,
+  areaDisplayMode: 'allowed-green',
   stationStatuses: {},
   routeStatuses: {},
 };
 
 it('round trips versioned shared state', () => expect(decodeState(encodeState(state))).toEqual(state));
+it('defaults old version 2 shares to green allowed-area shading', () => {
+  const { areaDisplayMode: _areaDisplayMode, ...oldState } = state;
+  expect(validateState(oldState)).toMatchObject({ areaDisplayMode: 'allowed-green' });
+});
 it('migrates a valid version 1 share payload', () => {
   const legacy = { version: 1, constraints: [base('radius')], layers: { museum: true }, viewport: state.viewport };
   const payload = btoa(unescape(encodeURIComponent(JSON.stringify(legacy)))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-  expect(decodeState(payload)).toMatchObject({ version: 2, stationZoneMiles: 0.25, mode: 'seeker' });
+  expect(decodeState(payload)).toMatchObject({ version: 2, stationZoneMiles: 0.25, areaDisplayMode: 'allowed-green', mode: 'seeker' });
 });
 it('rejects malformed shared configurations', () => {
   expect(() => decodeState('garbage')).toThrow();

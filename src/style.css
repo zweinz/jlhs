@@ -171,7 +171,7 @@ article {
   font-size: .82rem;
   font-weight: 750;
 }
-.stacked select, .inline-controls input { width: 100%; }
+.stacked select, .inline-controls input, .inline-controls select { width: 100%; }
 .inline-controls { display: grid; gap: .55rem; margin-top: .7rem; }
 .inline-controls .constrain { color: #17202a; font-size: .85rem; }
 .three-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .4rem; margin-top: .55rem; }

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
-import { combineConstraints, nearestPoi, partition, stationIdsOverlappingArea } from './geometry';
+import { combineConstraints, excludedArea, nearestPoi, partition, stationIdsOverlappingArea } from './geometry';
 import {
   CATEGORY_LABELS,
   PARTITION_CATEGORIES,
@@ -46,7 +46,7 @@ import {
   transitRoutes,
   validStations,
 } from './transit';
-import type { Constraint, Eligibility, Position, QuestionKind, SharedState } from './types';
+import type { AreaDisplayMode, Constraint, Eligibility, Position, QuestionKind, SharedState } from './types';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import './style.css';
 
@@ -73,6 +73,7 @@ const initial: SharedState = {
   viewport: { center: SF_CENTER, zoom: 12 },
   mode: 'seeker',
   stationZoneMiles: 0.25,
+  areaDisplayMode: 'allowed-green',
   stationStatuses: {},
   routeStatuses: {},
 };
@@ -269,6 +270,7 @@ export default function App() {
     () => combineConstraints(state.constraints, regions),
     [regions, state.constraints],
   );
+  const excluded = useMemo(() => excludedArea(feasible), [feasible]);
   const eligibleIds = useMemo(
     () => stationIdsOverlappingArea(statusEligibleIds, state.stationZoneMiles, feasible),
     [feasible, state.stationZoneMiles, statusEligibleIds],
@@ -407,7 +409,12 @@ export default function App() {
         });
       }
     });
-    data.addGeoJson({ ...feasible, properties: { kind: 'feasible' } });
+    const displayedArea = state.areaDisplayMode === 'excluded-red'
+      ? { area: excluded, kind: 'excluded' }
+      : { area: feasible, kind: 'feasible' };
+    if (displayedArea.area.geometry.coordinates.length > 0) {
+      data.addGeoJson({ ...displayedArea.area, properties: { kind: displayedArea.kind } });
+    }
     if (state.mode === 'hider' && state.hiderPosition) {
       data.addGeoJson({
         type: 'Feature',
@@ -431,6 +438,7 @@ export default function App() {
       const routeStatus = statusValue === 'in' || statusValue === 'out' ? statusValue : undefined;
       const eligible = eligibilityValue !== false;
       if (kind === 'feasible') return { fillColor: '#16a34a', fillOpacity: 0.28, strokeColor: '#166534', strokeWeight: 3 };
+      if (kind === 'excluded') return { fillColor: '#dc2626', fillOpacity: 0.28, strokeColor: '#991b1b', strokeWeight: 2 };
       if (kind === 'coastline') return { strokeColor: '#0284c7', strokeWeight: 4, fillOpacity: 0 };
       if (kind === 'hider-trace') return { strokeColor: '#e11d48', strokeOpacity: 0.95, strokeWeight: 5, zIndex: 20 };
       if (kind === 'trace-point') {
@@ -476,7 +484,7 @@ export default function App() {
       const areaName = event.feature.getProperty('areaName');
       if (typeof areaName === 'string') setMessage(areaName);
     });
-  }, [eligibleIds, feasible, partitions, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status, traceActive, tracePoints, traceScreenshot]);
+  }, [eligibleIds, excluded, feasible, partitions, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
@@ -635,6 +643,7 @@ export default function App() {
             </div>
             <div className="inline-controls">
               <label>Hiding-zone radius (miles)<input type="number" min="0.05" max="5" step="0.05" value={state.stationZoneMiles} onChange={(event) => setState((current) => ({ ...current, stationZoneMiles: Math.max(0.05, Number(event.target.value) || 0.25) }))} /></label>
+              <label>Area shading<select value={state.areaDisplayMode} onChange={(event) => setState((current) => ({ ...current, areaDisplayMode: event.target.value as AreaDisplayMode }))}><option value="allowed-green">Allowed green · excluded transparent</option><option value="excluded-red">Allowed transparent · excluded red</option></select></label>
             </div>
             <p className="helper">{eligibleIds.length} of {validStations.length} valid stations currently possible. A station turns off when its hiding-radius zone no longer overlaps the green feasible area; explicit station and route cuts also apply.</p>
           </details>
