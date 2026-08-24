@@ -12,7 +12,6 @@ const zipSource = JSON.parse(fs.readFileSync('/private/tmp/sf-zipcodes.geojson',
 
 const railLines = new Set(['F', 'J', 'K', 'L', 'M', 'N', 'T']);
 const routeFeatures = routesSource.features
-  .filter((feature) => railLines.has(feature.properties.lineabbr) || feature.properties.lineabbr.endsWith('R'))
   .map((feature) => {
     const routeId = feature.properties.lineabbr.replace(/^0+/, '');
     const simplified = turf.simplify(feature, { tolerance: 0.00004, highQuality: true });
@@ -22,7 +21,7 @@ const routeFeatures = routesSource.features
         routeId,
         name: routeId,
         direction: feature.properties.direction,
-        mode: railLines.has(routeId) ? 'light-rail' : 'rapid-muni',
+        mode: railLines.has(routeId) ? 'light-rail' : routeId.endsWith('R') ? 'rapid-muni' : 'other-transit',
       },
       geometry: simplified.geometry,
     };
@@ -114,7 +113,7 @@ fs.writeFileSync(
       sourceUrl: 'https://data.sfgov.org/Transportation/Muni-Simple-Routes/9exe-acju',
       retrieved: '2026-08-24',
       license: 'Open Data Commons Public Domain Dedication and License',
-      scope: 'Current light-rail and Rapid Muni lines (inbound and outbound patterns)',
+      scope: 'Current Muni routes (inbound and outbound patterns), classified as light rail, Rapid Muni, or other transit',
     },
     features: routeFeatures,
   })}\n`,

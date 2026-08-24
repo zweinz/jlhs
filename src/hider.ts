@@ -1,7 +1,7 @@
 import * as turf from '@turf/turf';
 import { pois } from './data';
 import { constraintArea, nearestPoi } from './geometry';
-import { distanceToRoute, nearestCoastlineDistance, routesForStation, transitRoutes, validStations } from './transit';
+import { distanceToRoute, nearestCoastlineDistance, primaryTransitRoutes, routesForStation, transitRoutes, validStations } from './transit';
 import type { Area, Constraint, Position } from './types';
 import {
   districtAt,
@@ -93,7 +93,7 @@ export function hiderAnswer(constraint: Constraint, hider: Position, regions: Re
     const category = constraint.category ?? 'museum';
     const reach = constraint.distanceMiles ?? 1;
     if (category === 'transit-route') {
-      const eligible = transitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= reach);
+      const eligible = primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= reach);
       if (eligible.length === 0) return 'Not within reach';
       const nearest = eligible.reduce((best, route) =>
         distanceToRoute(hider, route) < distanceToRoute(hider, best) ? route : best,

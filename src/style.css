@@ -317,6 +317,7 @@ article {
 .legend-key span { width: 12px; height: 4px; border-radius: 2px; }
 .legend-key .rail { background: #7c3aed; }
 .legend-key .rapid { background: #ea580c; }
+.legend-key .other-transit { background: #64748b; }
 .legend-key .eligible { height: 12px; border-radius: 50%; background: #2563eb; }
 .legend-key .cut { height: 12px; border-radius: 50%; background: #b91c1c; }
 .toast {

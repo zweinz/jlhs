@@ -2,7 +2,7 @@ import * as turf from '@turf/turf';
 import type { Feature, Polygon } from 'geojson';
 import type { Area, Constraint, Position } from './types';
 import { pois, SF_BOUNDS, SF_CENTER, type PoiCategory } from './data';
-import { coastline, distanceToRoute, nearestCoastlineDistance, routesForStation, transitRoutes, validStations } from './transit';
+import { coastline, distanceToRoute, nearestCoastlineDistance, primaryTransitRoutes, routesForStation, transitRoutes, validStations } from './transit';
 import {
   districtAt,
   elevationComparisonArea,
@@ -91,7 +91,7 @@ function tentacleArea(constraint: Constraint, regions: Record<string, Area>) {
   const category = constraint.category ?? 'museum';
   const reach = constraint.distanceMiles ?? 1;
   if (category === 'transit-route') {
-    const eligibleRoutes = transitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= reach);
+    const eligibleRoutes = primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= reach);
     const routeAreas = eligibleRoutes.map((route) =>
       unionAreas(route.features.map((feature) => turf.buffer(feature, reach, { units: 'miles', steps: 24 }) as Area)),
     );

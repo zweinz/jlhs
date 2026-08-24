@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as turf from '@turf/turf';
-import { setAllConstraintsEnabled, stationStatusesForAll } from './bulkActions';
+import { setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { combineConstraints, constraintArea, excludedArea, partition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
@@ -10,7 +10,7 @@ import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjec
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import { decodeState, encodeState, validateState } from './share';
-import { eligibleStationIds, transitRoutes, validStations } from './transit';
+import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
 
 const base = (kind: Constraint['kind']): Constraint => ({
@@ -208,8 +208,11 @@ it.each(PARTITION_CATEGORIES)('generates one %s region per source POI', (categor
 });
 
 describe('transit layers and cuts', () => {
-  it('contains current light-rail and Rapid Muni routes', () => {
+  it('contains current light-rail, Rapid Muni, and other transit routes', () => {
     expect(transitRoutes.map((route) => route.id)).toEqual(expect.arrayContaining(['F', 'J', 'K', 'L', 'M', 'N', 'T', '5R', '9R', '14R', '28R', '38R']));
+    expect(primaryTransitRoutes).toHaveLength(12);
+    expect(otherTransitRoutes.length).toBeGreaterThan(40);
+    expect(otherTransitRoutes.map((route) => route.id)).toEqual(expect.arrayContaining(['1', '14', '38', 'CA']));
   });
   it('generates valid-station regions and configurable zone geometry', () => {
     expect(Object.keys(partition('game-valid-station'))).toHaveLength(193);
@@ -257,6 +260,7 @@ it('shows card-specific photo notes before general photo notes', () => {
 
 it('applies bulk station and question state changes', () => {
   expect(stationStatusesForAll(['a', 'b'], 'out')).toEqual({ a: 'out', b: 'out' });
+  expect(statusesForAll(['F', 'J'], 'in')).toEqual({ F: 'in', J: 'in' });
   expect(stationStatusesForAll(['a', 'b'], '')).toEqual({});
   expect(setAllConstraintsEnabled([base('radar'), { ...base('measuring'), id: 'y' }], false).every((constraint) => !constraint.enabled)).toBe(true);
 });

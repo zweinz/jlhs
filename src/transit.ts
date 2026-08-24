@@ -8,7 +8,7 @@ import type { Eligibility, Position } from './types';
 export type TransitRoute = {
   id: string;
   name: string;
-  mode: 'light-rail' | 'rapid-muni';
+  mode: 'light-rail' | 'rapid-muni' | 'other-transit';
   features: Feature<LineString | MultiLineString>[];
 };
 
@@ -29,6 +29,8 @@ for (const feature of routeCollection.features) {
 }
 
 export const transitRoutes = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+export const primaryTransitRoutes = transitRoutes.filter((route) => route.mode !== 'other-transit');
+export const otherTransitRoutes = transitRoutes.filter((route) => route.mode === 'other-transit');
 export const transitRouteGeoJson = routeCollection;
 export const transitProvenance = routeCollection.provenance;
 export const coastline = (coastlineRaw as FeatureCollection<MultiLineString>).features[0];
