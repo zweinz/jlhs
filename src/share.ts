@@ -2,8 +2,13 @@ import { SF_BOUNDS } from './data';
 import type { Constraint, Position, SharedState } from './types';
 
 const kinds = new Set([
+  'radar',
   'radius',
   'thermometer',
+  'measuring',
+  'coastline',
+  'tentacle',
+  'photo-reference',
   'direction',
   'closer',
   'farther',
@@ -11,7 +16,7 @@ const kinds = new Set([
   'intersection',
   'exclusion',
 ]);
-const answers = new Set(['yes', 'no', 'warmer', 'colder']);
+const answers = new Set(['yes', 'no', 'warmer', 'colder', 'closer', 'farther', 'not-within-reach']);
 
 function validPosition(position: Position | undefined) {
   return (
@@ -40,12 +45,19 @@ export function validateState(value: unknown): SharedState {
   if (!value || typeof value !== 'object') throw Error('Configuration is not an object');
   const state = value as SharedState;
   if (
-    state.version !== 1 ||
+    state.version !== 2 ||
     !Array.isArray(state.constraints) ||
     state.constraints.length > 200 ||
     !state.viewport ||
     !state.layers ||
-    typeof state.layers !== 'object'
+    typeof state.layers !== 'object' ||
+    !['seeker', 'hider'].includes(state.mode) ||
+    !Number.isFinite(state.stationZoneMiles) ||
+    state.stationZoneMiles < 0.05 ||
+    state.stationZoneMiles > 5 ||
+    typeof state.constrainToStationZones !== 'boolean' ||
+    !state.stationStatuses ||
+    !state.routeStatuses
   ) {
     throw Error('Unsupported or incomplete configuration');
   }
@@ -53,6 +65,14 @@ export function validateState(value: unknown): SharedState {
     throw Error('Invalid viewport');
   }
   if (Object.values(state.layers).some((enabled) => typeof enabled !== 'boolean')) throw Error('Invalid layers');
+  if (state.hiderPosition !== undefined && !validPosition(state.hiderPosition)) throw Error('Invalid hider position');
+  if (!validGoogleMapsUrl(state.hiderMapUrl)) throw Error('Invalid hider map URL');
+  for (const statuses of [state.stationStatuses, state.routeStatuses]) {
+    if (typeof statuses !== 'object' || Object.keys(statuses).length > 500) throw Error('Invalid eligibility filters');
+    if (Object.entries(statuses).some(([id, status]) => !id || id.length > 150 || !['in', 'out'].includes(status))) {
+      throw Error('Invalid eligibility filters');
+    }
+  }
   for (const candidate of state.constraints as Constraint[]) {
     if (
       !candidate ||
@@ -68,12 +88,28 @@ export function validateState(value: unknown): SharedState {
       !validGoogleMapsUrl(candidate.originMapUrl) ||
       !validGoogleMapsUrl(candidate.targetMapUrl) ||
       (candidate.distanceMiles !== undefined &&
-        (!Number.isFinite(candidate.distanceMiles) || candidate.distanceMiles <= 0 || candidate.distanceMiles > 100))
+        (!Number.isFinite(candidate.distanceMiles) || candidate.distanceMiles <= 0 || candidate.distanceMiles > 100)) ||
+      (candidate.category !== undefined && (typeof candidate.category !== 'string' || candidate.category.length > 100))
     ) {
       throw Error('Invalid constraint');
     }
   }
   return state;
+}
+
+function migrate(value: unknown) {
+  if (!value || typeof value !== 'object') return value;
+  const legacy = value as Record<string, unknown>;
+  if (legacy.version !== 1) return value;
+  return {
+    ...legacy,
+    version: 2,
+    mode: 'seeker',
+    stationZoneMiles: 0.25,
+    constrainToStationZones: false,
+    stationStatuses: {},
+    routeStatuses: {},
+  };
 }
 
 export const encodeState = (state: SharedState) =>
@@ -86,7 +122,7 @@ export const decodeState = (value: string) => {
   if (value.length > 50000) throw Error('Configuration is too large');
   try {
     return validateState(
-      JSON.parse(decodeURIComponent(escape(atob(value.replaceAll('-', '+').replaceAll('_', '/'))))),
+      migrate(JSON.parse(decodeURIComponent(escape(atob(value.replaceAll('-', '+').replaceAll('_', '/')))))),
     );
   } catch (error) {
     throw Error(`Cannot restore configuration: ${error instanceof Error ? error.message : 'malformed payload'}`);

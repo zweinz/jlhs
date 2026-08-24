@@ -2,15 +2,21 @@ import type { Feature, MultiPolygon, Polygon } from 'geojson';
 
 export type Position = { lat: number; lng: number };
 export type QuestionKind =
+  | 'radar'
   | 'radius'
   | 'thermometer'
+  | 'measuring'
+  | 'coastline'
+  | 'tentacle'
+  | 'photo-reference'
   | 'direction'
   | 'closer'
   | 'farther'
   | 'matching-region'
   | 'intersection'
   | 'exclusion';
-export type Answer = 'yes' | 'no' | 'warmer' | 'colder';
+export type Answer = 'yes' | 'no' | 'warmer' | 'colder' | 'closer' | 'farther' | 'not-within-reach';
+export type Eligibility = 'in' | 'out';
 export interface Constraint {
   id: string;
   name: string;
@@ -24,11 +30,19 @@ export interface Constraint {
   distanceMiles?: number;
   direction?: 'north' | 'south' | 'east' | 'west';
   regionId?: string;
+  category?: string;
 }
 export type Area = Feature<Polygon | MultiPolygon>;
 export interface SharedState {
-  version: 1;
+  version: 2;
   constraints: Constraint[];
   layers: Record<string, boolean>;
   viewport: { center: Position; zoom: number };
+  mode: 'seeker' | 'hider';
+  hiderPosition?: Position;
+  hiderMapUrl?: string;
+  stationZoneMiles: number;
+  constrainToStationZones: boolean;
+  stationStatuses: Record<string, Eligibility>;
+  routeStatuses: Record<string, Eligibility>;
 }

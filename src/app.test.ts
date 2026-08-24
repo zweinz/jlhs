@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as turf from '@turf/turf';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
-import { combineConstraints, constraintArea, partition } from './geometry';
+import { combineConstraints, constraintArea, partition, stationZoneArea } from './geometry';
+import { hiderAnswer } from './hider';
+import { PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import { decodeState, encodeState, validateState } from './share';
+import { eligibleStationIds, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
 
 const base = (kind: Constraint['kind']): Constraint => ({
@@ -15,6 +18,7 @@ const base = (kind: Constraint['kind']): Constraint => ({
   target: { lat: 37.78, lng: -122.42 },
   distanceMiles: 1,
   direction: 'north',
+  category: 'museum',
 });
 
 describe('SF normalization', () => {
@@ -28,18 +32,26 @@ describe('SF normalization', () => {
     expect(pois.every((poi) => poi.sourceSheet && poi.sourceObjectId && poi.sourceRow >= 2)).toBe(true);
     expect(pois.filter((poi) => poi.category === 'museum')).toHaveLength(49);
     expect(pois.filter((poi) => poi.category === 'library')).toHaveLength(29);
+    expect(validStations).toHaveLength(193);
   });
 });
 
-describe.each(['radius', 'thermometer', 'direction', 'closer', 'farther', 'intersection', 'exclusion'] as const)(
+describe.each(['radar', 'thermometer', 'measuring', 'coastline', 'direction', 'closer', 'farther', 'intersection', 'exclusion'] as const)(
   '%s geometry',
   (kind) => {
-    it('produces geographic area', () =>
-      expect(
-        turf.area(constraintArea({ ...base(kind), answer: kind === 'thermometer' ? 'colder' : 'yes' })),
-      ).toBeGreaterThan(0));
+    it('produces geographic area', () => {
+      const answer = kind === 'thermometer' ? 'colder' : kind === 'measuring' || kind === 'coastline' ? 'closer' : 'yes';
+      expect(turf.area(constraintArea({ ...base(kind), answer }))).toBeGreaterThan(0);
+    });
   },
 );
+
+it('uses a true thermometer bisector rather than a distance radius', () => {
+  const constraint = { ...base('thermometer'), answer: 'warmer' as const };
+  const area = constraintArea(constraint);
+  expect(turf.booleanPointInPolygon([-122.41, 37.78], area)).toBe(true);
+  expect(turf.booleanPointInPolygon([-122.46, 37.76], area)).toBe(false);
+});
 
 it('uses named matching regions', () => {
   const regions = partition('museum');
@@ -47,12 +59,33 @@ it('uses named matching regions', () => {
   expect(turf.area(constraintArea({ ...base('matching-region'), regionId: id }, regions))).toBeGreaterThan(0);
 });
 
-it('intersects enabled constraints and ignores disabled ones', () => {
-  const first = base('radius');
-  const one = turf.area(combineConstraints([first]));
-  const both = turf.area(
-    combineConstraints([first, { ...first, id: 'b', origin: { lat: 37.77, lng: -122.42 } }]),
+it('models named and not-within-reach tentacle answers', () => {
+  const museum = pois.find((poi) => poi.category === 'museum')!;
+  const regions = partition('museum');
+  const named = constraintArea(
+    { ...base('tentacle'), origin: museum, regionId: museum.id, distanceMiles: 1, answer: 'yes' },
+    regions,
   );
+  const outside = constraintArea(
+    { ...base('tentacle'), origin: museum, regionId: museum.id, distanceMiles: 1, answer: 'not-within-reach' },
+    regions,
+  );
+  expect(turf.area(named)).toBeGreaterThan(0);
+  expect(turf.area(outside)).toBeGreaterThan(turf.area(named));
+});
+
+it('models transit-line matching and large-game metro tentacles', () => {
+  const jStation = validStations.find((station) => eligibleStationIds({}, { J: 'in' }).includes(station.id))!;
+  const matching = constraintArea({ ...base('matching-region'), category: 'transit-route', regionId: 'J', distanceMiles: 0.25 });
+  const tentacle = constraintArea({ ...base('tentacle'), origin: jStation, category: 'transit-route', regionId: 'J', distanceMiles: 15 });
+  expect(turf.area(matching)).toBeGreaterThan(0);
+  expect(turf.area(tentacle)).toBeGreaterThan(0);
+});
+
+it('intersects enabled constraints and ignores disabled ones', () => {
+  const first = base('radar');
+  const one = turf.area(combineConstraints([first]));
+  const both = turf.area(combineConstraints([first, { ...first, id: 'b', origin: { lat: 37.77, lng: -122.42 } }]));
   expect(both).toBeLessThan(one);
   expect(turf.area(combineConstraints([{ ...first, enabled: false }]))).toBeGreaterThan(one);
 });
@@ -61,15 +94,56 @@ it.each(PARTITION_CATEGORIES)('generates one %s region per source POI', (categor
   expect(Object.keys(partition(category))).toHaveLength(pois.filter((poi) => poi.category === category).length);
 });
 
+describe('transit layers and cuts', () => {
+  it('contains current light-rail and Rapid Muni routes', () => {
+    expect(transitRoutes.map((route) => route.id)).toEqual(expect.arrayContaining(['F', 'J', 'K', 'L', 'M', 'N', 'T', '5R', '9R', '14R', '28R', '38R']));
+  });
+  it('generates a valid-station partition and configurable zone geometry', () => {
+    expect(Object.keys(partition('game-valid-station'))).toHaveLength(193);
+    expect(turf.area(stationZoneArea([validStations[0].id], 0.25))).toBeGreaterThan(0);
+  });
+  it('cuts explicit stations and whole routes', () => {
+    const station = validStations.find((candidate) => eligibleStationIds({}, { J: 'in' }).includes(candidate.id));
+    expect(station).toBeTruthy();
+    expect(eligibleStationIds({ [station!.id]: 'out' }, {})).not.toContain(station!.id);
+    expect(eligibleStationIds({}, { J: 'out' })).not.toContain(station!.id);
+  });
+});
+
+it('calculates hider answers for rulebook question families', () => {
+  const hider = { lat: 37.7705, lng: -122.4405 };
+  expect(hiderAnswer({ ...base('radar'), distanceMiles: 1 }, hider, {})).toBe('Yes');
+  expect(['Hotter', 'Colder']).toContain(hiderAnswer({ ...base('thermometer') }, hider, {}));
+  expect(['Closer', 'Farther']).toContain(hiderAnswer({ ...base('measuring') }, hider, {}));
+  expect(['Closer', 'Farther']).toContain(hiderAnswer({ ...base('coastline') }, hider, {}));
+});
+
+it('keeps all rulebook notes attached to every primary question', () => {
+  for (const kind of PRIMARY_QUESTION_KINDS) {
+    expect(QUESTION_DEFINITIONS[kind].notes.length).toBeGreaterThan(0);
+    expect(QUESTION_DEFINITIONS[kind].sourceUrl).toMatch(/^https:\/\/www\.lifack\.ch\//);
+  }
+});
+
 const state: SharedState = {
-  version: 1,
-  constraints: [base('radius')],
-  layers: { museum: true },
+  version: 2,
+  constraints: [base('radar')],
+  layers: { museum: true, 'station-zones': true },
   viewport: { center: { lat: 37.77, lng: -122.44 }, zoom: 12 },
+  mode: 'seeker',
+  stationZoneMiles: 0.25,
+  constrainToStationZones: false,
+  stationStatuses: {},
+  routeStatuses: {},
 };
 
-it('round trips shared state', () => expect(decodeState(encodeState(state))).toEqual(state));
+it('round trips versioned shared state', () => expect(decodeState(encodeState(state))).toEqual(state));
+it('migrates a valid version 1 share payload', () => {
+  const legacy = { version: 1, constraints: [base('radius')], layers: { museum: true }, viewport: state.viewport };
+  const payload = btoa(unescape(encodeURIComponent(JSON.stringify(legacy)))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  expect(decodeState(payload)).toMatchObject({ version: 2, stationZoneMiles: 0.25, mode: 'seeker' });
+});
 it('rejects malformed shared configurations', () => {
   expect(() => decodeState('garbage')).toThrow();
-  expect(() => validateState({ version: 2 })).toThrow();
+  expect(() => validateState({ version: 3 })).toThrow();
 });
