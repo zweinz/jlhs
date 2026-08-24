@@ -4,7 +4,7 @@ A responsive React + TypeScript + Vite browser application that models San Franc
 
 ## Local development
 
-Requires Node.js 20+. Copy `.env.example` to `.env`, add a Google Maps JavaScript API browser key, and restrict that key to your development and production origins. Credentials are ignored by Git.
+Requires Node.js 20+. The checked-out local installation lives at `~/Sites/jlhs`. Copy `.env.example` to `.env`, add a Google Maps JavaScript API browser key, and restrict that key to your development and production origins. Credentials are ignored by Git.
 
 ```bash
 cp .env.example .env
@@ -16,13 +16,13 @@ Open the Vite URL. Without a key the app deliberately shows an actionable error 
 
 ## Deployment
 
-Set `VITE_GOOGLE_MAPS_API_KEY` in the deployment provider's build environment, run `npm ci && npm run build`, and publish `dist/` as a static site. For example, Netlify uses build command `npm run build` and publish directory `dist`; Cloudflare Pages uses the same values. Because the key is delivered to browsers, protect it with Google Cloud HTTP-referrer and API restrictions rather than treating it as a server secret.
+The production deployment uses Vercel's free Hobby tier. Import the GitHub repository, keep the detected Vite settings (`npm run build`, output directory `dist`), and add `VITE_GOOGLE_MAPS_API_KEY` for Production, Preview, and Development. Because the key is delivered to browsers, protect it with Google Cloud HTTP-referrer restrictions for `http://localhost:*/*`, the production Vercel origin, and preview deployments, plus an API restriction to Maps JavaScript API.
 
 ## Data and architecture
 
-`src/data/sf-pois.json` is the normalized SF subset of spreadsheet `1VyhjPUGxNSybxBV7yFSEECI9sKcdJOME2TpFpAaXpok`, gid `252568279`, captured 2026-08-24. Each record retains its source row and a stable `sf:<category>:<slug>` identifier. Runtime validation rejects duplicates, malformed IDs, nonnumeric coordinates, and points outside the SF working bounds. Update the checked-in snapshot rather than fetching mutable spreadsheet data in a visitor's browser.
+`src/data/sf-pois.json` contains 3,760 complete geographic records from the SF workbook at spreadsheet `1VyhjPUGxNSybxBV7yFSEECI9sKcdJOME2TpFpAaXpok`, gid `252568279`, captured 2026-08-24. It covers every source tab containing geographic records; nine unfinished rows in the explicitly WIP stairway tab are recorded as skipped because they have no coordinates. Each POI retains its source sheet, row, object ID, coordinate source, and a stable `sf:<category>:<source-object-id>` identifier. Runtime validation rejects duplicates, malformed IDs, missing provenance, nonnumeric coordinates, and points outside the SF working bounds. Update the checked-in snapshot rather than fetching mutable spreadsheet data in a visitor's browser.
 
-`src/questions.ts` is the rulebook-facing question catalog; `src/types.ts` separates definitions and answers; `src/geometry.ts` implements radii, warmer/colder thermometers, directional half-planes, closer/farther comparisons, matching Voronoi regions, intersections, and exclusions. The initial domain is a documented SF bounding rectangle; coastline clipping is intentionally deferred. Museum and library partitions are independent layers derived solely from source POIs. `src/share.ts` validates and version-controls URL payloads before restoration.
+`src/questions.ts` is the rulebook-facing question catalog; `src/types.ts` separates definitions and answers; `src/geometry.ts` implements radii, warmer/colder thermometers, directional half-planes, closer/farther comparisons, matching Voronoi regions, intersections, and exclusions. The initial domain is a documented SF bounding rectangle; coastline clipping is intentionally deferred. Every POI-backed matching category allowed by the SF rulebook has an independent layer: mountains, dog parks, golf courses, museums, movie theaters, libraries, hospitals, foreign consulates, and farmers markets. `src/share.ts` validates and version-controls URL payloads before restoration.
 
 ## Sharing and accessibility
 
