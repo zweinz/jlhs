@@ -65,19 +65,31 @@ describe('map-link resolver API', () => {
     fetchMock.mockRestore();
   });
 
-  it('returns the place query exposed by an address-based short link', async () => {
+  it('geocodes the place query exposed by an address-based short link', async () => {
     const source = 'https://maps.app.goo.gl/brySMBrgJW6g4iwa9?g_st=ic';
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(null, {
-        status: 302,
-        headers: { location: 'https://maps.google.com?q=330+Valdez+Ave,+San+Francisco,+CA+94127&entry=gps' },
-      }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://maps.google.com?q=330+Valdez+Ave,+San+Francisco,+CA+94127&entry=gps' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          result: { addressMatches: [{ coordinates: { x: -122.456379308028, y: 37.73311294576 } }] },
+        }),
+      );
     const response = await resolveMapLink(
       new Request(`https://jlhs.vercel.app/api/resolve-map-link?url=${encodeURIComponent(source)}`),
     );
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ query: '330 Valdez Ave, San Francisco, CA 94127' });
+    await expect(response.json()).resolves.toEqual({
+      position: { lat: 37.73311294576, lng: -122.456379308028 },
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ hostname: 'geocoding.geo.census.gov' }),
+    );
     fetchMock.mockRestore();
   });
 });

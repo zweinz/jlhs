@@ -2,6 +2,23 @@ import { isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFrom
 
 export const config = { runtime: 'edge' };
 
+type CensusResponse = {
+  result?: { addressMatches?: Array<{ coordinates?: { x?: number; y?: number } }> };
+};
+
+async function geocodeStreetAddress(address: string) {
+  const endpoint = new URL('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress');
+  endpoint.searchParams.set('address', address);
+  endpoint.searchParams.set('benchmark', 'Public_AR_Current');
+  endpoint.searchParams.set('format', 'json');
+  const response = await fetch(endpoint, { headers: { accept: 'application/json' } });
+  if (!response.ok) return null;
+  const body = (await response.json()) as CensusResponse;
+  const coordinates = body.result?.addressMatches?.[0]?.coordinates;
+  if (!Number.isFinite(coordinates?.x) || !Number.isFinite(coordinates?.y)) return null;
+  return { lat: coordinates!.y!, lng: coordinates!.x! };
+}
+
 export default async function handler(request: Request) {
   const value = new URL(request.url).searchParams.get('url') ?? '';
   if (!isGoogleMapsUrl(value)) {
@@ -18,7 +35,10 @@ export default async function handler(request: Request) {
       const resolved = parseCoordinatesFromGoogleMapsUrl(current.href);
       if (resolved) return Response.json({ position: resolved });
       const query = parsePlaceQueryFromGoogleMapsUrl(current.href);
-      if (query) return Response.json({ query });
+      if (query) {
+        const geocoded = await geocodeStreetAddress(query);
+        if (geocoded) return Response.json({ position: geocoded });
+      }
       const response = await fetch(current, {
         redirect: 'manual',
         headers: { 'user-agent': 'Mozilla/5.0 (compatible; SF-Hiding-Area/1.0)' },
