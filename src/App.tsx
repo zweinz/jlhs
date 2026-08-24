@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
 import { combineConstraints, nearestPoi, partition, stationIdsOverlappingArea } from './geometry';
 import {
@@ -59,7 +59,7 @@ const REGION_CATEGORIES: PoiCategory[] = [
 ];
 const initialLayers = {
   ...Object.fromEntries(VISIBLE_POI_PARTITIONS.map((category) => [category, category === 'museum'])),
-  'station-zones': true,
+  'station-zones': false,
   'transit-routes': true,
   coastline: false,
   'supervisor-districts': false,
@@ -135,6 +135,7 @@ type MapLinkFieldProps = {
 };
 
 function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLinkFieldProps) {
+  const inputId = useId();
   const [busy, setBusy] = useState<'link' | 'location' | undefined>();
   const apply = async () => {
     try {
@@ -181,9 +182,10 @@ function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLink
   };
   return (
     <div className="map-link-field">
-      <label>
-        {label}
+      <label htmlFor={inputId}>{label}</label>
+      <div className="map-link-input">
         <input
+          id={inputId}
           type="url"
           inputMode="url"
           autoCapitalize="none"
@@ -192,15 +194,15 @@ function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLink
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
-      </label>
+        <button className="clear-link" type="button" disabled={!value || !!busy} onClick={clear} aria-label={`Clear ${label} link`} title="Clear link">×</button>
+      </div>
       <div className="map-link-actions">
         <button className="secondary" type="button" disabled={!value.trim() || !!busy} onClick={apply}>
-          {busy === 'link' ? 'Reading…' : 'Use pin'}
+          {busy === 'link' ? 'Reading…' : 'Use link'}
         </button>
-        <button className="secondary" type="button" disabled={!!busy} onClick={useCurrentLocation}>
+        <button className="secondary location-button" type="button" disabled={!!busy} onClick={useCurrentLocation}>
           {busy === 'location' ? 'Locating…' : 'Use current location'}
         </button>
-        <button className="secondary clear-link" type="button" disabled={!value || !!busy} onClick={clear} aria-label={`Clear ${label} link`}>Clear</button>
       </div>
     </div>
   );
