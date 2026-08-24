@@ -27,3 +27,9 @@ The production deployment uses Vercel's free Hobby tier. Import the GitHub repos
 ## Sharing and accessibility
 
 **Share** serializes constraints, enabled layers, map center, and zoom into a version-1 `?config=` URL and copies it when clipboard access is available. Invalid or oversized payloads are rejected. Native labels, visible focus states, status announcements, responsive controls, a source legend, and Google/data attribution are included.
+
+Locations can be pasted as full or shortened Google Maps links. Full links are parsed in the browser; `/api/resolve-map-link` follows only allow-listed Google Maps short links and returns the shared pin coordinates. The resolver rejects arbitrary hosts. The layout is mobile-first: the map is placed before the controls on small screens, controls use touch-sized targets, and long layer/legend sections collapse.
+
+## Retrospective transit reachability
+
+This iteration does not add a “how far in one hour” transit isochrone. Google Routes can query transit itineraries up to seven days in the past, but it requires a destination and does not return a reachable-area polygon in one request. The 511 SF Bay APIs expose scheduled departures and historical monthly GTFS feeds, but deriving a multimodal reachability area requires downloading the applicable feed and running a routing graph. That is deliberately deferred until there is a reliable single-call reachability service rather than multiplying route requests or presenting a misleading approximation.

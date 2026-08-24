@@ -8,9 +8,10 @@ import {
   SF_BOUNDS,
   type PartitionCategory,
 } from './data';
+import { googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
 import { QUESTION_DEFINITIONS } from './questions';
 import { decodeState, encodeState } from './share';
-import type { Constraint, QuestionKind, SharedState } from './types';
+import type { Constraint, Position, QuestionKind, SharedState } from './types';
 import './style.css';
 
 const initialLayers = Object.fromEntries(PARTITION_CATEGORIES.map((category) => [category, category === 'museum']));
@@ -22,6 +23,34 @@ const initial: SharedState = {
 };
 const colors = ['#553c9a', '#007c78', '#b45309', '#be185d', '#166534', '#0369a1', '#9f1239'];
 
+let googleMapsPromise: Promise<typeof google.maps> | null = null;
+
+function loadGoogleMaps(key: string) {
+  if (window.google?.maps) return Promise.resolve(window.google.maps);
+  if (googleMapsPromise) return googleMapsPromise;
+
+  googleMapsPromise = new Promise((resolve, reject) => {
+    const callbackName = '__jlhsGoogleMapsLoaded';
+    const callbackWindow = window as typeof window & Record<string, unknown>;
+    const script = document.createElement('script');
+    script.dataset.jlhsGoogleMaps = 'true';
+    callbackWindow[callbackName] = () => {
+      delete callbackWindow[callbackName];
+      resolve(window.google.maps);
+    };
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=${callbackName}`;
+    script.async = true;
+    script.onerror = () => {
+      delete callbackWindow[callbackName];
+      googleMapsPromise = null;
+      reject(new Error('Google Maps could not load.'));
+    };
+    document.head.append(script);
+  });
+
+  return googleMapsPromise;
+}
+
 function restoredState() {
   try {
     const payload = new URLSearchParams(location.search).get('config');
@@ -29,6 +58,59 @@ function restoredState() {
   } catch {
     return initial;
   }
+}
+
+function insideSanFrancisco(position: Position) {
+  return (
+    position.lat >= SF_BOUNDS.south &&
+    position.lat <= SF_BOUNDS.north &&
+    position.lng >= SF_BOUNDS.west &&
+    position.lng <= SF_BOUNDS.east
+  );
+}
+
+type MapLinkFieldProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onResolved: (position: Position) => void;
+  onMessage: (message: string) => void;
+};
+
+function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLinkFieldProps) {
+  const [busy, setBusy] = useState(false);
+  const apply = async () => {
+    try {
+      setBusy(true);
+      const resolved = await resolveGoogleMapsLink(value.trim());
+      if (!insideSanFrancisco(resolved)) throw new Error('That pin is outside the San Francisco working bounds.');
+      onResolved(resolved);
+      onMessage(`${label} set from Google Maps.`);
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : 'Could not use that Google Maps link.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="map-link-field">
+      <label>
+        {label}
+        <input
+          type="url"
+          inputMode="url"
+          autoCapitalize="none"
+          autoCorrect="off"
+          placeholder="Paste a Google Maps link"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </label>
+      <button className="secondary" type="button" disabled={!value.trim() || busy} onClick={apply}>
+        {busy ? 'Reading…' : 'Use pin'}
+      </button>
+    </div>
+  );
 }
 
 export default function App() {
@@ -53,35 +135,42 @@ export default function App() {
       setMessage('Add VITE_GOOGLE_MAPS_API_KEY to .env to load the map.');
       return;
     }
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly`;
-    script.async = true;
-    script.onload = () => {
-      if (!mapNode.current) return;
-      const map = new google.maps.Map(mapNode.current, {
-        center: state.viewport.center,
-        zoom: state.viewport.zoom,
-        restriction: { latLngBounds: SF_BOUNDS, strictBounds: false },
-        mapTypeControl: false,
+    let cancelled = false;
+    let map: google.maps.Map | null = null;
+    loadGoogleMaps(key)
+      .then(() => {
+        if (cancelled || !mapNode.current) return;
+        map = new google.maps.Map(mapNode.current, {
+          center: state.viewport.center,
+          zoom: state.viewport.zoom,
+          restriction: { latLngBounds: SF_BOUNDS, strictBounds: false },
+          mapTypeControl: false,
+          fullscreenControl: false,
+          streetViewControl: false,
+          gestureHandling: 'greedy',
+        });
+        mapRef.current = map;
+        setStatus('ready');
+        map.addListener('idle', () => {
+          const center = map?.getCenter();
+          if (center) {
+            setState((current) => ({
+              ...current,
+              viewport: { center: { lat: center.lat(), lng: center.lng() }, zoom: map?.getZoom() ?? 12 },
+            }));
+          }
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStatus('error');
+        setMessage('Google Maps could not load. Check the API key, referrer restrictions, and network connection.');
       });
-      mapRef.current = map;
-      setStatus('ready');
-      map.addListener('idle', () => {
-        const center = map.getCenter();
-        if (center) {
-          setState((current) => ({
-            ...current,
-            viewport: { center: { lat: center.lat(), lng: center.lng() }, zoom: map.getZoom() ?? 12 },
-          }));
-        }
-      });
+    return () => {
+      cancelled = true;
+      if (map) google.maps.event.clearInstanceListeners(map);
+      if (mapRef.current === map) mapRef.current = null;
     };
-    script.onerror = () => {
-      setStatus('error');
-      setMessage('Google Maps could not load. Check the API key, referrer restrictions, and network connection.');
-    };
-    document.head.append(script);
-    return () => script.remove();
   }, []);
 
   useEffect(() => {
@@ -134,12 +223,21 @@ export default function App() {
         constraint.id === id ? { ...constraint, ...update } : constraint,
       ),
     }));
+  const applyPosition = (id: string, update: Partial<Constraint>, position: Position) => {
+    patch(id, { ...update });
+    mapRef.current?.panTo(position);
+    if ((mapRef.current?.getZoom() ?? 0) < 14) mapRef.current?.setZoom(14);
+  };
   const share = async () => {
     const url = new URL(location.href);
     url.searchParams.set('config', encodeState(state));
     history.replaceState({}, '', url);
-    await navigator.clipboard?.writeText(url.href);
-    setMessage('Share URL copied and placed in the address bar.');
+    try {
+      await navigator.clipboard?.writeText(url.href);
+      setMessage('Share URL copied and placed in the address bar.');
+    } catch {
+      setMessage('Share URL is ready in the address bar.');
+    }
   };
 
   return (
@@ -147,7 +245,7 @@ export default function App() {
       <header>
         <div>
           <h1>SF Hiding Area</h1>
-          <p>Combine geographic answers without clipping to the coastline.</p>
+          <p>Turn shared pins and game answers into a feasible area.</p>
         </div>
         <button onClick={share} aria-label="Copy shareable configuration URL">
           Share
@@ -155,25 +253,27 @@ export default function App() {
       </header>
       <div className="layout">
         <aside aria-label="Question constraint controls">
-          <section>
-            <h2>Partition layers</h2>
-            {PARTITION_CATEGORIES.map((category) => (
-              <label className="toggle" key={category}>
-                <input
-                  type="checkbox"
-                  checked={!!state.layers[category]}
-                  onChange={(event) =>
-                    setState((current) => ({
-                      ...current,
-                      layers: { ...current.layers, [category]: event.target.checked },
-                    }))
-                  }
-                />
-                {CATEGORY_LABELS[category]}
-              </label>
-            ))}
-          </section>
-          <section>
+          <details className="panel">
+            <summary>Partition layers</summary>
+            <div className="toggle-grid">
+              {PARTITION_CATEGORIES.map((category) => (
+                <label className="toggle" key={category}>
+                  <input
+                    type="checkbox"
+                    checked={!!state.layers[category]}
+                    onChange={(event) =>
+                      setState((current) => ({
+                        ...current,
+                        layers: { ...current.layers, [category]: event.target.checked },
+                      }))
+                    }
+                  />
+                  {CATEGORY_LABELS[category]}
+                </label>
+              ))}
+            </div>
+          </details>
+          <section className="questions">
             <h2>Questions</h2>
             <div className="add">
               <select id="kind" aria-label="Question type">
@@ -185,104 +285,138 @@ export default function App() {
               </select>
               <button onClick={add}>Add</button>
             </div>
-            {state.constraints.length === 0 && <p className="muted">Add an answer to narrow the feasible area.</p>}
-            {state.constraints.map((constraint) => (
-              <article key={constraint.id}>
-                <input
-                  aria-label="Constraint name"
-                  value={constraint.name}
-                  onChange={(event) => patch(constraint.id, { name: event.target.value })}
-                />
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={constraint.enabled}
-                    onChange={(event) => patch(constraint.id, { enabled: event.target.checked })}
-                  />{' '}
-                  Enabled
-                </label>
-                <label>
-                  Answer
-                  <select
-                    aria-label={`${constraint.name} answer`}
-                    value={constraint.answer}
-                    onChange={(event) => patch(constraint.id, { answer: event.target.value as Constraint['answer'] })}
-                  >
-                    {(constraint.kind === 'thermometer' ? ['warmer', 'colder'] : ['yes', 'no']).map((answer) => (
-                      <option key={answer}>{answer}</option>
-                    ))}
-                  </select>
-                </label>
-                {constraint.kind === 'direction' && (
-                  <label>
-                    Direction
-                    <select
-                      value={constraint.direction}
-                      onChange={(event) =>
-                        patch(constraint.id, { direction: event.target.value as Constraint['direction'] })
-                      }
-                    >
-                      {['north', 'south', 'east', 'west'].map((direction) => (
-                        <option key={direction}>{direction}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {constraint.kind === 'matching-region' && (
-                  <label>
-                    Source POI
-                    <select
-                      value={constraint.regionId}
-                      onChange={(event) => patch(constraint.id, { regionId: event.target.value })}
-                    >
-                      {PARTITION_CATEGORIES.flatMap((category) =>
-                        pois
-                          .filter((poi) => poi.category === category)
-                          .map((poi) => (
-                            <option key={poi.id} value={poi.id}>
-                              {CATEGORY_LABELS[category]} — {poi.name}
-                            </option>
-                          )),
-                      )}
-                    </select>
-                  </label>
-                )}
-                {constraint.kind !== 'direction' && constraint.kind !== 'matching-region' && (
-                  <label>
-                    Miles
+            {state.constraints.length === 0 && (
+              <p className="empty-state">Add an answer, then paste any Google Maps links you were sent.</p>
+            )}
+            {state.constraints.map((constraint) => {
+              const usesTarget = ['thermometer', 'closer', 'farther'].includes(constraint.kind);
+              return (
+                <article key={constraint.id}>
+                  <div className="constraint-heading">
                     <input
-                      aria-label={`${constraint.name} distance in miles`}
-                      type="number"
-                      min="0.1"
-                      step="0.1"
-                      value={constraint.distanceMiles}
-                      onChange={(event) => patch(constraint.id, { distanceMiles: Number(event.target.value) })}
+                      aria-label="Constraint name"
+                      value={constraint.name}
+                      onChange={(event) => patch(constraint.id, { name: event.target.value })}
                     />
-                  </label>
-                )}
-                <button
-                  className="danger"
-                  onClick={() =>
-                    setState((current) => ({
-                      ...current,
-                      constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id),
-                    }))
-                  }
-                >
-                  Remove
-                </button>
-              </article>
-            ))}
+                    <label className="enabled">
+                      <input
+                        type="checkbox"
+                        checked={constraint.enabled}
+                        onChange={(event) => patch(constraint.id, { enabled: event.target.checked })}
+                      />
+                      Enabled
+                    </label>
+                  </div>
+                  <div className="control-grid">
+                    <label>
+                      Answer
+                      <select
+                        aria-label={`${constraint.name} answer`}
+                        value={constraint.answer}
+                        onChange={(event) =>
+                          patch(constraint.id, { answer: event.target.value as Constraint['answer'] })
+                        }
+                      >
+                        {(constraint.kind === 'thermometer' ? ['warmer', 'colder'] : ['yes', 'no']).map((answer) => (
+                          <option key={answer}>{answer}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {constraint.kind === 'direction' && (
+                      <label>
+                        Direction
+                        <select
+                          value={constraint.direction}
+                          onChange={(event) =>
+                            patch(constraint.id, { direction: event.target.value as Constraint['direction'] })
+                          }
+                        >
+                          {['north', 'south', 'east', 'west'].map((direction) => (
+                            <option key={direction}>{direction}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {constraint.kind === 'matching-region' && (
+                      <label className="wide">
+                        Source POI
+                        <select
+                          value={constraint.regionId}
+                          onChange={(event) => patch(constraint.id, { regionId: event.target.value })}
+                        >
+                          {PARTITION_CATEGORIES.flatMap((category) =>
+                            pois
+                              .filter((poi) => poi.category === category)
+                              .map((poi) => (
+                                <option key={poi.id} value={poi.id}>
+                                  {CATEGORY_LABELS[category]} — {poi.name}
+                                </option>
+                              )),
+                          )}
+                        </select>
+                      </label>
+                    )}
+                    {constraint.kind !== 'direction' && constraint.kind !== 'matching-region' && (
+                      <label>
+                        Miles
+                        <input
+                          aria-label={`${constraint.name} distance in miles`}
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          value={constraint.distanceMiles}
+                          onChange={(event) => patch(constraint.id, { distanceMiles: Number(event.target.value) })}
+                        />
+                      </label>
+                    )}
+                  </div>
+                  <MapLinkField
+                    label={usesTarget ? 'Seeker / comparison pin' : 'Answer location pin'}
+                    value={constraint.originMapUrl ?? ''}
+                    onChange={(originMapUrl) => patch(constraint.id, { originMapUrl })}
+                    onResolved={(origin) => applyPosition(constraint.id, { origin }, origin)}
+                    onMessage={setMessage}
+                  />
+                  {usesTarget && (
+                    <MapLinkField
+                      label="Reference / previous pin"
+                      value={constraint.targetMapUrl ?? ''}
+                      onChange={(targetMapUrl) => patch(constraint.id, { targetMapUrl })}
+                      onResolved={(target) => applyPosition(constraint.id, { target }, target)}
+                      onMessage={setMessage}
+                    />
+                  )}
+                  <button
+                    className="danger remove"
+                    onClick={() =>
+                      setState((current) => ({
+                        ...current,
+                        constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id),
+                      }))
+                    }
+                  >
+                    Remove question
+                  </button>
+                </article>
+              );
+            })}
           </section>
-          <section>
-            <h2>Legend</h2>
+          <details className="panel legend-panel">
+            <summary>Legend and sources</summary>
             {PARTITION_CATEGORIES.filter((category) => state.layers[category]).flatMap((category) =>
               pois
                 .filter((poi) => poi.category === category)
                 .map((poi, index) => (
                   <div className="legend" key={poi.id}>
                     <i style={{ background: colors[index % colors.length] }} />
-                    {poi.name} <small>{poi.sourceSheet} row {poi.sourceRow}</small>
+                    <a
+                      href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {poi.name}
+                    </a>
+                    <small>row {poi.sourceRow}</small>
                   </div>
                 )),
             )}
@@ -290,7 +424,7 @@ export default function App() {
               {provenance.totalPois.toLocaleString()} normalized POIs from{' '}
               <a href={provenance.sourceUrl}>the SF spreadsheet</a> · retrieved {provenance.retrieved}
             </p>
-          </section>
+          </details>
         </aside>
         <section className="map-wrap" aria-label="San Francisco feasible area map">
           {status !== 'ready' && (
@@ -303,9 +437,9 @@ export default function App() {
         </section>
       </div>
       {message && status === 'ready' && (
-        <div className="toast" role="status">
+        <button className="toast" role="status" onClick={() => setMessage('')} aria-label="Dismiss message">
           {message}
-        </div>
+        </button>
       )}
     </main>
   );
