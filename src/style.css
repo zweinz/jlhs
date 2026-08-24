@@ -213,7 +213,21 @@ article {
 .danger { background: #9b1c1c; }
 .remove { width: 100%; margin-top: .8rem; }
 .rule-notes { margin-top: .75rem; padding: .65rem; border-radius: .55rem; background: #f1f4f7; color: #364553; font-size: .78rem; }
-.rule-notes h3 { margin: 0 0 .35rem; }
+.rule-notes summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+  color: #263746;
+  font-size: .9rem;
+  font-weight: 800;
+  cursor: pointer;
+  list-style: none;
+}
+.rule-notes summary::-webkit-details-marker { display: none; }
+.rule-notes summary::after { content: '›'; font-size: 1.25rem; line-height: 1; transition: transform .16s ease; }
+.rule-notes[open] summary { margin-bottom: .45rem; }
+.rule-notes[open] summary::after { transform: rotate(90deg); }
 .rule-notes ul { margin: 0; padding-left: 1.1rem; }
 .rule-notes li + li { margin-top: .25rem; }
 .rule-notes p { display: grid; gap: .1rem; margin: .5rem 0; }
