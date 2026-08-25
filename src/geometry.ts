@@ -23,6 +23,11 @@ const invert = excludedArea;
 const clipToFrame = (area: Area) =>
   (turf.intersect(turf.featureCollection([frame(), area])) as Area | null) ?? empty();
 
+export function partitionLabelPosition(area: Area): Position {
+  const [lng, lat] = turf.pointOnFeature(area).geometry.coordinates;
+  return { lat, lng };
+}
+
 export function nearestPoi(category: string, position: Position) {
   const candidates = pois.filter((poi) => poi.category === category);
   if (candidates.length === 0) return undefined;

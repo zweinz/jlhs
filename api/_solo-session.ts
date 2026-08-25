@@ -14,6 +14,7 @@ export type SecretSoloSession = {
   commitment: string;
   phase: SoloPhase;
   cardsDrawn: number;
+  cardsKept?: number;
   questionUses: Record<string, number>;
   wideHeading: number;
   station: { id: string; name: string; position: Position };

@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
 import { setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
-import { combineConstraints, excludedArea, nearestPoi, partition, stationIdsOverlappingArea } from './geometry';
+import { combineConstraints, excludedArea, nearestPoi, partition, partitionLabelPosition, stationIdsOverlappingArea } from './geometry';
 import {
   CATEGORY_LABELS,
   PARTITION_CATEGORIES,
@@ -39,6 +39,7 @@ import {
 import { decodeState, encodeState } from './share';
 import {
   defaultSfDateTime,
+  keptCardsForQuestion,
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
   SOLO_PHOTO_SUBJECTS,
@@ -83,6 +84,7 @@ const initialLayers = {
   'supervisor-districts': false,
   'zip-codes': false,
   landmasses: false,
+  'partition-pins': true,
 };
 const initial: SharedState = {
   version: 2,
@@ -118,8 +120,13 @@ function restoredSolo(): SoloClientSession | undefined {
     const constraints = new Map(session.boardState.constraints.map((constraint) => [constraint.id, constraint]));
     session.questions = Object.fromEntries(Object.entries(session.questions).map(([id, record]) => {
       const constraint = constraints.get(id);
-      return [id, constraint ? { ...record, displayText: publicSoloDisplayText(constraint.kind, record.displayText) } : record];
+      return [id, constraint ? {
+        ...record,
+        cardsKept: record.cardsKept ?? keptCardsForQuestion(constraint, Math.max(0, record.repetition - 1)),
+        displayText: publicSoloDisplayText(constraint.kind, record.displayText),
+      } : record];
     }));
+    session.cardsKept ??= Object.values(session.questions).reduce((total, record) => total + (record.cardsKept ?? 0), 0);
     return session;
   } catch {
     return undefined;
@@ -372,6 +379,14 @@ export default function App() {
   }, [solo, state]);
 
   useEffect(() => {
+    if (!message || status !== 'ready') return;
+    const timeoutId = window.setTimeout(() => {
+      setMessage((current) => current === message ? '' : current);
+    }, 6000);
+    return () => window.clearTimeout(timeoutId);
+  }, [message, status]);
+
+  useEffect(() => {
     if (!scopedStations.some((station) => station.id === selectedStation)) {
       setSelectedStation(scopedStations[0]?.id ?? '');
     }
@@ -501,11 +516,13 @@ export default function App() {
           ...feature,
           properties: { kind: 'region', color, id: poi.id, areaName: poi.name, number: index + 1 },
         });
-        data.addGeoJson({
-          type: 'Feature',
-          properties: { kind: 'poi-source', color, id: poi.id, areaName: poi.name, number: index + 1 },
-          geometry: { type: 'Point', coordinates: [poi.lng, poi.lat] },
-        });
+        if (state.layers['partition-pins'] !== false) {
+          data.addGeoJson({
+            type: 'Feature',
+            properties: { kind: 'poi-source', color, id: poi.id, areaName: poi.name, number: index + 1 },
+            geometry: { type: 'Point', coordinates: [poi.lng, poi.lat] },
+          });
+        }
       });
     }
     const geographicPartitions = [
@@ -514,10 +531,21 @@ export default function App() {
       { key: 'landmasses', collection: sfLandmasses, offset: 35 },
     ];
     geographicPartitions.filter(({ key }) => state.layers[key]).forEach(({ collection, offset }) => {
-      collection.features.forEach((feature, index) => data.addGeoJson({
-        ...feature,
-        properties: { ...feature.properties, kind: 'geographic-region', color: partitionColor(index, collection.features.length, offset), areaName: feature.properties.name },
-      }));
+      collection.features.forEach((feature, index) => {
+        const color = partitionColor(index, collection.features.length, offset);
+        data.addGeoJson({
+          ...feature,
+          properties: { ...feature.properties, kind: 'geographic-region', color, areaName: feature.properties.name },
+        });
+        if (state.layers['partition-pins'] !== false) {
+          const labelPosition = partitionLabelPosition(feature);
+          data.addGeoJson({
+            type: 'Feature',
+            properties: { kind: 'partition-source', color, areaName: feature.properties.name, label: feature.properties.name },
+            geometry: { type: 'Point', coordinates: [labelPosition.lng, labelPosition.lat] },
+          });
+        }
+      });
     });
     if (state.layers.coastline) {
       data.addGeoJson({ ...coastline, properties: { kind: 'coastline' } });
@@ -641,6 +669,23 @@ export default function App() {
             anchor: new google.maps.Point(15, 36),
           },
           zIndex: 30,
+        };
+      }
+      if (kind === 'partition-source') {
+        const colorValue = feature.getProperty('color');
+        const color = typeof colorValue === 'string' ? colorValue : '#553c9a';
+        const rawLabel = String(feature.getProperty('label') ?? '');
+        const label = rawLabel.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[character] ?? character);
+        const width = Math.min(112, Math.max(38, 18 + rawLabel.length * 7));
+        const center = width / 2;
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="38" viewBox="0 0 ${width} 38"><path d="M8 1h${width - 16}a7 7 0 0 1 7 7v15a7 7 0 0 1-7 7h-${Math.max(1, width / 2 - 10)}L${center} 37l-8-7H8a7 7 0 0 1-7-7V8a7 7 0 0 1 7-7Z" fill="${color}" stroke="white" stroke-width="2"/><text x="${center}" y="20" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="700" fill="white">${label}</text></svg>`;
+        return {
+          icon: {
+            url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+            scaledSize: new google.maps.Size(width, 38),
+            anchor: new google.maps.Point(center, 37),
+          },
+          zIndex: 29,
         };
       }
       const colorValue = feature.getProperty('color');
@@ -843,7 +888,8 @@ export default function App() {
       });
       const body = await response.json() as {
         token?: string; answer?: Constraint['answer']; displayText?: string; resolvedRegionId?: string;
-        photoUrl?: string; repetition?: number; cardsDrawn?: number; totalCardsDrawn?: number; error?: string;
+        photoUrl?: string; repetition?: number; cardsDrawn?: number; cardsKept?: number;
+        totalCardsDrawn?: number; totalCardsKept?: number; error?: string;
       };
       if (!response.ok || !body.token || !body.answer || !body.displayText) throw new Error(body.error ?? 'The AI could not answer.');
       patchConstraint(constraint.id, { answer: body.answer, ...(body.resolvedRegionId ? { regionId: body.resolvedRegionId } : {}) });
@@ -852,12 +898,14 @@ export default function App() {
         displayText: publicSoloDisplayText(constraint.kind, body.displayText),
         repetition: body.repetition ?? 1,
         cardsDrawn: body.cardsDrawn ?? 0,
+        cardsKept: body.cardsKept ?? keptCardsForQuestion(constraint, (body.repetition ?? 1) - 1),
         photoUrl: body.photoUrl,
       };
       setSolo((current) => current ? {
         ...current,
         token: body.token!,
         cardsDrawn: body.totalCardsDrawn ?? current.cardsDrawn,
+        cardsKept: body.totalCardsKept ?? current.cardsKept,
         questions: { ...current.questions, [constraint.id]: record },
       } : current);
       setMessage(`AI answered · drew ${record.cardsDrawn} card${record.cardsDrawn === 1 ? '' : 's'}.`);
@@ -970,7 +1018,7 @@ export default function App() {
         </div>
       </header>
       {solo ? <nav className="solo-status" aria-label="Solo game status">
-        <span><b>{solo.phase === 'end-game' ? 'End game' : solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Revealed' : 'Seeking'}</b><small>{solo.cardsDrawn} cards drawn</small></span>
+        <span><b>{solo.phase === 'end-game' ? 'End game' : solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Revealed' : 'Seeking'}</b><small>{solo.cardsDrawn} drawn · {solo.cardsKept} kept</small></span>
         <button type="button" onClick={checkSoloCurrentLocation} disabled={soloBusy || !!solo.reveal}>{soloBusy ? 'Checking…' : 'Check my location'}</button>
       </nav> : <nav className="mode-switch" aria-label="Player mode">
         <button className={state.mode === 'seeker' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'seeker' }))}>Seeker</button>
@@ -980,7 +1028,7 @@ export default function App() {
         <aside aria-label="Question constraint controls">
           {solo && <section className="panel solo-panel">
             <h2>AI hider</h2>
-            <p className="helper">The hiding spot is sealed by commitment <code>{solo.commitment.slice(0, 12)}…</code>. Questions use the normal small-game card costs; cards are counted but never drawn or played.</p>
+            <p className="helper">The hiding spot is sealed by commitment <code>{solo.commitment.slice(0, 12)}…</code>. Questions use the normal card costs; drawn and kept totals are counted, but no hand, discards, powerups, or card play are simulated.</p>
             {!solo.reveal && <details>
               <summary>GPS fallback: check a pasted pin</summary>
               <MapLinkField label="My current Google Maps pin" value={finishMapUrl} onChange={setFinishMapUrl} onResolved={(position) => void checkSoloPosition(position)} onMessage={setMessage} />
@@ -1051,8 +1099,9 @@ export default function App() {
               <label className="toggle"><input type="checkbox" checked={!!state.layers['supervisor-districts']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'supervisor-districts': event.target.checked } }))} />Supervisorial districts D1–D11</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers['zip-codes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'zip-codes': event.target.checked } }))} />ZIP-code areas</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers.landmasses} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, landmasses: event.target.checked } }))} />SF landmasses</label>
+              <label className="toggle"><input type="checkbox" checked={state.layers['partition-pins'] !== false} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'partition-pins': event.target.checked } }))} />Partition pins</label>
             </div>
-            <p className="helper">Tap a displayed region to identify it. ZIP codes are generalized delivery areas, not official administrative districts.</p>
+            <p className="helper">Partition pins label Supervisorial districts, ZIP areas, landmasses, and the selected POI partition. They can be hidden independently from the colored regions. ZIP codes are generalized delivery areas, not official administrative districts.</p>
           </details>
 
           <details className="panel">
@@ -1131,7 +1180,7 @@ export default function App() {
                   <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
                   <p className="question-help">{definition.help}</p>
                   {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition ? '' : 'waiting'}`}><span>Hider answer</span><strong>{state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
-                  {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={`${constraint.name} Street View answer`} />}</div>}
+                  {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={`${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
                     {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
                     {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
@@ -1155,6 +1204,16 @@ export default function App() {
           <details className="panel legend-panel">
             <summary>Legend, data, and coverage</summary>
             <div className="legend-key"><span className="rail" />Light rail <span className="rapid" />Rapid Muni <span className="other-transit" />Other transit <span className="eligible" />Eligible station <span className="cut" />Cut station/route</div>
+            <section className="storage-summary" aria-labelledby="storage-summary-title">
+              <h3 id="storage-summary-title">Storage, refresh, and sharing</h3>
+              <dl>
+                <div><dt>Normal workspace</dt><dd>Edits live only in this browser tab. A refresh restores the configuration currently in the URL; without a <code>config</code> value, it starts fresh.</dd></div>
+                <div><dt>Share URL</dt><dd>Choosing “Share map” writes a snapshot of the human workspace into the URL. It includes seeker constraints and map settings, but excludes the hider position, current location, path trace, Solo session, route, station, and hiding spot.</dd></div>
+                <div><dt>Solo game</dt><dd>The encrypted 48-hour session token, card totals, question history, Solo board, and pre-Solo workspace are saved in this browser’s local storage. Refreshing this browser resumes it; another person or browser does not share the game.</dd></div>
+                <div><dt>Server</dt><dd>Solo requests are processed statelessly: the app has no game-session database. The server reads and replaces the encrypted token and calls Google for routing and Street View without putting the Solo secret in a share URL.</dd></div>
+                <div><dt>Temporary location data</dt><dd>Current-location display and path traces remain in page memory and disappear on refresh. A GPS or pasted finish pin is sent to the server only when checking the Solo hiding spot.</dd></div>
+              </dl>
+            </section>
             <p className="source">{provenance.totalPois.toLocaleString()} normalized POIs from <a href={provenance.sourceUrl}>the SF spreadsheet</a> · retrieved {provenance.retrieved}</p>
             <p className="source">Routes: <a href={transitProvenance.sourceUrl}>DataSF Muni Simple Routes</a> · coastline: <a href={coastlineProvenance.sourceUrl}>DataSF SF Shoreline and Islands</a>.</p>
             <p className="source">Districts/water: <a href={rulebookAreaProvenance.districts.sourceUrl}>DataSF districts</a> / <a href={rulebookAreaProvenance.water.sourceUrl}>water bodies</a> · streets: <a href={streetProvenance.sourceUrl}>DataSF centerlines</a> · elevation: <a href={elevationProvenance.sourceUrl}>Mapzen terrain tiles</a>.</p>

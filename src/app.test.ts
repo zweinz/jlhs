@@ -3,7 +3,7 @@ import * as turf from '@turf/turf';
 import { excludeAllExcept, setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
-import { combineConstraints, constraintArea, excludedArea, partition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
+import { combineConstraints, constraintArea, excludedArea, partition, partitionLabelPosition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer, solveHiderQuestion } from './hider';
 import { orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
@@ -176,6 +176,13 @@ describe('missing measuring and matching geometry', () => {
     expect(hiderAnswer({ ...base('matching-region'), category: 'street-path' }, hider, {})).toMatch(/Yes|No/);
     expect(hiderAnswer({ ...base('matching-region'), category: 'supervisor-district' }, hider, {})).toMatch(/Yes|No/);
   });
+});
+
+it('places partition pins inside every Supervisorial district and ZIP area', () => {
+  for (const feature of [...supervisorDistricts.features, ...zipCodeAreas.features]) {
+    const position = partitionLabelPosition(feature);
+    expect(turf.booleanPointInPolygon([position.lng, position.lat], feature)).toBe(true);
+  }
 });
 
 describe('hider path tracing', () => {

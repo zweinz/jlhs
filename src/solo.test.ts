@@ -6,6 +6,8 @@ import checkLocationHandler from '../api/solo/check-location';
 import {
   cardsForQuestion,
   canonicalQuestionKey,
+  keptCardsForQuestion,
+  keptCardsFromQuestionUses,
   photoCamera,
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
@@ -22,6 +24,11 @@ describe('Solo question accounting', () => {
     expect([0, 1, 2].map((uses) => cardsForQuestion(radar, uses))).toEqual([2, 4, 6]);
     expect([0, 1].map((uses) => cardsForQuestion(measuring, uses))).toEqual([3, 6]);
     expect([0, 1].map((uses) => cardsForQuestion(photo, uses))).toEqual([1, 2]);
+    expect([0, 1, 2].map((uses) => keptCardsForQuestion(radar, uses))).toEqual([1, 2, 3]);
+    expect([0, 1].map((uses) => keptCardsForQuestion(measuring, uses))).toEqual([1, 2]);
+    expect([0, 1].map((uses) => keptCardsForQuestion(photo, uses))).toEqual([1, 2]);
+    expect([0, 1].map((uses) => keptCardsForQuestion({ kind: 'tentacle' }, uses))).toEqual([2, 4]);
+    expect(keptCardsFromQuestionUses({ 'radar:1.000': 3, 'tentacle:museum': 2 })).toBe(12);
   });
 
   it('uses distance for radar identity and subject for category cards', () => {
@@ -165,7 +172,9 @@ describe('Solo token and commitment security', () => {
     const firstBody = await first.json();
     expect(first.status).toBe(200);
     expect(firstBody.cardsDrawn).toBe(2);
+    expect(firstBody.cardsKept).toBe(1);
     expect(firstBody.totalCardsDrawn).toBe(2);
+    expect(firstBody.totalCardsKept).toBe(1);
     expect(JSON.stringify(firstBody)).not.toContain('37.779');
 
     const second = await questionHandler(new Request('https://example.test/api/solo/question', {
@@ -174,7 +183,9 @@ describe('Solo token and commitment security', () => {
     }));
     const secondBody = await second.json();
     expect(secondBody.cardsDrawn).toBe(4);
+    expect(secondBody.cardsKept).toBe(2);
     expect(secondBody.totalCardsDrawn).toBe(6);
+    expect(secondBody.totalCardsKept).toBe(3);
   });
 
   it('counts a rulebook null answer without adding a geographic constraint', async () => {
@@ -193,7 +204,9 @@ describe('Solo token and commitment security', () => {
     expect(body.answer).toBe('null');
     expect(body.displayText).toBe('Null');
     expect(body.cardsDrawn).toBe(3);
+    expect(body.cardsKept).toBe(1);
     expect(body.totalCardsDrawn).toBe(3);
+    expect(body.totalCardsKept).toBe(1);
     expect(body.resolvedRegionId).toBeUndefined();
   });
 

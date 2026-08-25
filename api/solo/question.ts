@@ -1,7 +1,7 @@
 import { SF_BOUNDS } from '../../src/data';
 import { solveHiderQuestion } from '../../src/hider';
 import { QUESTION_DEFINITIONS } from '../../src/questions';
-import { canonicalQuestionKey, cardsForQuestion, photoCamera, publicSoloDisplayText, SOLO_PHOTO_SUBJECTS, type SoloPhotoKind } from '../../src/solo';
+import { canonicalQuestionKey, cardsForQuestion, keptCardsForQuestion, keptCardsFromQuestionUses, photoCamera, publicSoloDisplayText, SOLO_PHOTO_SUBJECTS, type SoloPhotoKind } from '../../src/solo';
 import type { Constraint, Position, QuestionKind } from '../../src/types';
 import { jsonError, readJson, seal, unseal, type PhotoAsset, type SecretSoloSession } from '../_solo-session';
 
@@ -37,6 +37,7 @@ export default async function handler(request: Request) {
     const key = canonicalQuestionKey(constraint);
     const priorUses = session.questionUses[key] ?? 0;
     const cardsDrawn = cardsForQuestion(constraint, priorUses);
+    const cardsKept = keptCardsForQuestion(constraint, priorUses);
     let answer = constraint.answer;
     let displayText: string;
     let resolvedRegionId: string | undefined;
@@ -68,6 +69,7 @@ export default async function handler(request: Request) {
 
     session.questionUses[key] = priorUses + 1;
     session.cardsDrawn += cardsDrawn;
+    session.cardsKept = (session.cardsKept ?? keptCardsFromQuestionUses({ ...session.questionUses, [key]: priorUses })) + cardsKept;
     return Response.json({
       token: await seal(session),
       answer,
@@ -76,7 +78,9 @@ export default async function handler(request: Request) {
       photoUrl,
       repetition: priorUses + 1,
       cardsDrawn,
+      cardsKept,
       totalCardsDrawn: session.cardsDrawn,
+      totalCardsKept: session.cardsKept,
       phase: session.phase,
     }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {

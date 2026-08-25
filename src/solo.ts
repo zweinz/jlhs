@@ -26,6 +26,7 @@ export type SoloQuestionRecord = {
   displayText: string;
   repetition: number;
   cardsDrawn: number;
+  cardsKept: number;
   photoUrl?: string;
 };
 
@@ -65,6 +66,7 @@ export type SoloClientSession = {
   token: string;
   commitment: string;
   cardsDrawn: number;
+  cardsKept: number;
   phase: SoloPhase;
   departureTime: string;
   questions: Record<string, SoloQuestionRecord>;
@@ -73,7 +75,7 @@ export type SoloClientSession = {
   reveal?: SoloReveal;
 };
 
-export type SoloStartResponse = Pick<SoloClientSession, 'token' | 'commitment' | 'cardsDrawn' | 'phase' | 'departureTime'>;
+export type SoloStartResponse = Pick<SoloClientSession, 'token' | 'commitment' | 'cardsDrawn' | 'cardsKept' | 'phase' | 'departureTime'>;
 
 export function canonicalQuestionKey(constraint: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>) {
   if (constraint.kind === 'radar' || constraint.kind === 'thermometer') {
@@ -85,6 +87,19 @@ export function canonicalQuestionKey(constraint: Pick<Constraint, 'kind' | 'dist
 export function cardsForQuestion(constraint: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>, priorUses: number) {
   const base = QUESTION_DEFINITIONS[constraint.kind].baseDrawCount ?? 0;
   return base * (priorUses + 1);
+}
+
+export function keptCardsForQuestion(constraint: Pick<Constraint, 'kind'>, priorUses: number) {
+  const base = QUESTION_DEFINITIONS[constraint.kind].baseKeepCount ?? 0;
+  return base * (priorUses + 1);
+}
+
+export function keptCardsFromQuestionUses(questionUses: Record<string, number>) {
+  return Object.entries(questionUses).reduce((total, [key, uses]) => {
+    const kind = key.split(':', 1)[0] as Constraint['kind'];
+    const base = QUESTION_DEFINITIONS[kind]?.baseKeepCount ?? 0;
+    return total + base * uses * (uses + 1) / 2;
+  }, 0);
 }
 
 export function stationDifficulty(durationSeconds: number, nearbyStations: number) {

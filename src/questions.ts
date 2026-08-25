@@ -7,6 +7,7 @@ export type QuestionDefinition = {
   sourceUrl?: string;
   drawInstruction?: string;
   baseDrawCount?: number;
+  baseKeepCount?: number;
   timeLimit?: string;
 };
 
@@ -29,6 +30,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     ],
     drawInstruction: 'Draw 2, keep 1',
     baseDrawCount: 2,
+    baseKeepCount: 1,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/radar_questions/',
   },
@@ -44,6 +46,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     ],
     drawInstruction: 'Draw 2, keep 1',
     baseDrawCount: 2,
+    baseKeepCount: 1,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/thermometer_questions/',
   },
@@ -60,6 +63,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     ],
     drawInstruction: 'Draw 3, keep 1',
     baseDrawCount: 3,
+    baseKeepCount: 1,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/measuring_questions/',
   },
@@ -76,6 +80,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     ],
     drawInstruction: 'Draw 3, keep 1',
     baseDrawCount: 3,
+    baseKeepCount: 1,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/measuring_questions/',
   },
@@ -93,6 +98,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     ],
     drawInstruction: 'Draw 3, keep 1',
     baseDrawCount: 3,
+    baseKeepCount: 1,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/matching_questions/',
   },
@@ -109,6 +115,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     ],
     drawInstruction: 'Draw 4, keep 2',
     baseDrawCount: 4,
+    baseKeepCount: 2,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/tentacle_questions/',
   },
@@ -126,6 +133,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     ],
     drawInstruction: 'Draw 1, keep 1',
     baseDrawCount: 1,
+    baseKeepCount: 1,
     timeLimit: '10 minutes for the SF small game',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/photo_questions/',
   },

@@ -52,6 +52,7 @@ export default async function handler(request: Request) {
       commitment: '',
       phase: 'seeking',
       cardsDrawn: 0,
+      cardsKept: 0,
       questionUses: {},
       wideHeading: Number.parseInt(salt.slice(0, 8), 16) % 360,
       station: { id: chosen.station.id, name: chosen.station.name, position: { lat: chosen.station.lat, lng: chosen.station.lng } },
@@ -64,6 +65,7 @@ export default async function handler(request: Request) {
       token: await seal(session),
       commitment: session.commitment,
       cardsDrawn: 0,
+      cardsKept: 0,
       phase: session.phase,
       departureTime: session.departureTime,
     }, { headers: { 'cache-control': 'no-store' } });
