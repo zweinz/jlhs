@@ -12,6 +12,7 @@ import {
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
   soloPhotoPlan,
+  soloRevealMapFeature,
   SOLO_PHOTO_SUBJECTS,
   stationDifficulty,
   verifyRevealCommitment,
@@ -101,6 +102,12 @@ describe('Solo camera and time rules', () => {
     const away = { id: 'away', position: { lat: station.lat - 0.0025, lng: station.lng } };
     expect(choosePanorama([near, away], station)?.id).toBe('away');
     expect(choosePanorama([near], station)).toBeUndefined();
+  });
+
+  it('creates a map marker at the exact revealed hiding spot', () => {
+    const feature = soloRevealMapFeature(spot);
+    expect(feature.geometry.coordinates).toEqual([spot.lng, spot.lat]);
+    expect(feature.properties).toMatchObject({ kind: 'solo-reveal', areaName: 'AI hiding spot' });
   });
 });
 

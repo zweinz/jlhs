@@ -262,6 +262,10 @@ export function soloStateForNewGame(base: SharedState): SharedState {
   };
 }
 
+export function soloRevealMapFeature(spot: Position) {
+  return turf.point([spot.lng, spot.lat], { kind: 'solo-reveal', areaName: 'AI hiding spot' });
+}
+
 export async function verifyRevealCommitment(reveal: SoloReveal) {
   const payload = {
     sessionId: reveal.sessionId,

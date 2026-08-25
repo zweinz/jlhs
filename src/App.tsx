@@ -44,6 +44,7 @@ import {
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
   SOLO_PHOTO_SUBJECTS,
+  soloRevealMapFeature,
   soloStateForNewGame,
   verifyRevealCommitment,
   type SoloClientSession,
@@ -682,6 +683,7 @@ export default function App() {
         geometry: { type: 'Point', coordinates: [currentLocation.lng, currentLocation.lat] },
       });
     }
+    if (solo?.reveal) data.addGeoJson(soloRevealMapFeature(solo.reveal.spot));
     const displayedArea = state.areaDisplayMode === 'excluded-red'
       ? { area: excluded, kind: 'excluded' }
       : { area: feasible, kind: 'feasible' };
@@ -729,6 +731,17 @@ export default function App() {
             scale: 7,
           },
           zIndex: 40,
+        };
+      }
+      if (kind === 'solo-reveal') {
+        const star = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><path d="M24 2l5.3 14.7 15.7.5-12.4 9.6L37 42l-13-9-13 9 4.4-15.2L3 17.2l15.7-.5L24 2Z" fill="#facc15" stroke="white" stroke-width="6" stroke-linejoin="round"/><path d="M24 2l5.3 14.7 15.7.5-12.4 9.6L37 42l-13-9-13 9 4.4-15.2L3 17.2l15.7-.5L24 2Z" fill="#facc15" stroke="#92400e" stroke-width="2" stroke-linejoin="round"/></svg>';
+        return {
+          icon: {
+            url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(star)}`,
+            scaledSize: new google.maps.Size(44, 44),
+            anchor: new google.maps.Point(22, 22),
+          },
+          zIndex: 60,
         };
       }
       if (kind === 'transit-route') {
@@ -801,7 +814,7 @@ export default function App() {
       const areaName = event.feature.getProperty('areaName');
       if (typeof areaName === 'string') setMessage(areaName);
     });
-  }, [currentLocation, currentLocationVisible, eligibleIds, excluded, feasible, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
+  }, [currentLocation, currentLocationVisible, eligibleIds, excluded, feasible, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.reveal, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
@@ -1033,6 +1046,10 @@ export default function App() {
     let reveal = body.reveal;
     if (reveal) reveal = { ...reveal, commitmentValid: await verifyRevealCommitment(reveal) };
     setSolo((current) => current ? { ...current, token: body.token!, phase: body.phase!, reveal: reveal ?? current.reveal } : current);
+    if (reveal) {
+      mapRef.current?.panTo(reveal.spot);
+      mapRef.current?.setZoom(17);
+    }
     if (body.message) setMessage(body.message);
   };
 
