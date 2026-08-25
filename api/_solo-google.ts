@@ -13,6 +13,7 @@ type MatrixElement = {
   distanceMeters?: number;
   condition?: string;
   status?: { code?: number; message?: string };
+  error?: { code?: number; message?: string; status?: string };
 };
 
 type RouteResponse = {
@@ -73,20 +74,28 @@ async function routeMatrix(origin: Position, destinations: Position[], departure
     } catch {
       // Google did not return its usual JSON error envelope.
     }
+    if (response.status === 429) {
+      throw new Error('Google Routes quota is temporarily exhausted. Try again in one minute; if this continues, the configured daily limit has been reached.');
+    }
     throw new Error(`Google Routes matrix failed (${response.status})${detail ? `: ${detail}` : ''}.`);
   }
   return response.json() as Promise<MatrixElement[]>;
 }
 
 function matrixServiceError(elements: MatrixElement[]) {
+  const streamError = elements.find((element) => element.error?.code)?.error;
   const failures = elements.filter((element) => element.status?.code);
   const hasUsableElement = elements.some((element) =>
     !element.status?.code && element.condition !== 'ROUTE_NOT_FOUND' && Number.isFinite(parseSeconds(element.duration)),
   );
-  if (hasUsableElement || failures.length === 0) return null;
+  if (hasUsableElement) return null;
+  if (streamError?.code === 429 || streamError?.status === 'RESOURCE_EXHAUSTED') {
+    return new Error('Google Routes quota is temporarily exhausted. Try again in one minute; if this continues, the configured daily limit has been reached.');
+  }
+  if (failures.length === 0) return null;
   const code = failures[0].status?.code;
   if (code === 8) {
-    return new Error('The Google Routes daily limit has been reached. Resume an existing Solo game or try again after midnight Pacific time.');
+    return new Error('Google Routes quota is temporarily exhausted. Try again in one minute; if this continues, the configured daily limit has been reached.');
   }
   const detail = failures[0].status?.message?.replace(/\s+/g, ' ').trim().slice(0, 240);
   return new Error(`Google Routes could not calculate station travel times${detail ? `: ${detail}` : ` (status ${code})`}.`);
@@ -94,13 +103,27 @@ function matrixServiceError(elements: MatrixElement[]) {
 
 export async function reachableStations(origin: Position, departureTime: string) {
   const stationBatches = chunk(validStations, 100);
-  const matrices = await Promise.all(stationBatches.map((batch) => routeMatrix(origin, batch, departureTime)));
-  const serviceError = matrixServiceError(matrices.flat());
+  const matrices: Array<{ stations: typeof validStations; elements: MatrixElement[] }> = [];
+  const requestErrors: Error[] = [];
+  for (const stations of stationBatches) {
+    try {
+      matrices.push({ stations, elements: await routeMatrix(origin, stations, departureTime) });
+    } catch (error) {
+      requestErrors.push(error instanceof Error ? error : new Error('Google Routes could not calculate station travel times.'));
+    }
+  }
+  const hasUsableElement = matrices.some(({ elements }) => elements.some((element) =>
+    !element.status?.code && element.condition !== 'ROUTE_NOT_FOUND' && Number.isFinite(parseSeconds(element.duration)),
+  ));
+  if (!hasUsableElement && requestErrors.length > 0) {
+    throw requestErrors.find((error) => /quota/i.test(error.message)) ?? requestErrors[0];
+  }
+  const serviceError = matrixServiceError(matrices.flatMap(({ elements }) => elements));
   if (serviceError) throw serviceError;
-  return matrices.flatMap((elements, batchIndex) => elements.flatMap((element) => {
+  return matrices.flatMap(({ stations, elements }) => elements.flatMap((element) => {
     const localIndex = element.destinationIndex;
     if (localIndex === undefined || element.status?.code || element.condition === 'ROUTE_NOT_FOUND') return [];
-    const station = stationBatches[batchIndex][localIndex];
+    const station = stations[localIndex];
     const durationSeconds = parseSeconds(element.duration);
     if (!station || !Number.isFinite(durationSeconds) || durationSeconds > 1800) return [];
     const nearby = nearbyStationCount(station, validStations);

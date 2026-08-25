@@ -176,7 +176,39 @@ describe('Google transit request boundaries', () => {
     }])));
     await expect(reachableStations(
       { lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z',
-    )).rejects.toThrow(/daily limit has been reached/i);
+    )).rejects.toThrow(/quota is temporarily exhausted/i);
+  });
+
+  it('keeps usable stations when another matrix batch is rate limited', async () => {
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      call += 1;
+      if (call === 1) return Response.json([{
+        destinationIndex: 0,
+        status: {},
+        condition: 'ROUTE_EXISTS',
+        duration: '900s',
+        distanceMeters: 1000,
+      }]);
+      return Response.json({ error: { message: 'Resource has been exhausted.' } }, { status: 429 });
+    }));
+    const reachable = await reachableStations(
+      { lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z',
+    );
+    expect(reachable).toHaveLength(1);
+    expect(call).toBe(2);
+  });
+
+  it('recognizes a terminal resource-exhausted record in a streamed matrix', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([{
+      destinationIndex: 0,
+      status: { code: 13, message: 'Internal Error Encountered.' },
+    }, {
+      error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Resource has been exhausted.' },
+    }])));
+    await expect(reachableStations(
+      { lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z',
+    )).rejects.toThrow(/quota is temporarily exhausted/i);
   });
 
   it('includes Google error details for malformed matrix requests', async () => {
