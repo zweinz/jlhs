@@ -38,6 +38,16 @@ import {
 } from './rulebookGeometry';
 import { decodeState, encodeState } from './share';
 import {
+  defaultSfDateTime,
+  sfLocalDateTimeToIso,
+  SOLO_PHOTO_SUBJECTS,
+  soloStateForNewGame,
+  verifyRevealCommitment,
+  type SoloClientSession,
+  type SoloQuestionRecord,
+  type SoloStartResponse,
+} from './solo';
+import {
   coastline,
   coastlineProvenance,
   distanceToRoute,
@@ -90,6 +100,25 @@ const partitionColor = (index: number, total: number, offset = 0) =>
 const measuringChoices = selectableSubjects(MEASURING_SUBJECTS);
 const matchingChoices = selectableSubjects(MATCHING_SUBJECTS);
 const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
+const soloPhotoChoices: RulebookSubject[] = SOLO_PHOTO_SUBJECTS.map((subject) => ({
+  ...subject,
+  status: 'in-play',
+  support: 'reference',
+  notes: ['Solo house rule: this image is generated from the AI hider’s committed outdoor Street View panorama.'],
+}));
+
+const SOLO_STORAGE_KEY = 'sf-hiding-area-solo-v1';
+
+function restoredSolo(): SoloClientSession | undefined {
+  try {
+    const value = localStorage.getItem(SOLO_STORAGE_KEY);
+    return value ? JSON.parse(value) as SoloClientSession : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const initialSolo = restoredSolo();
 
 let googleMapsPromise: Promise<typeof google.maps> | null = null;
 
@@ -258,7 +287,17 @@ export default function App() {
   const mapNode = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const drawn = useRef<google.maps.Data | null>(null);
-  const [state, setState] = useState<SharedState>(restoredState);
+  const [state, setState] = useState<SharedState>(() => initialSolo?.boardState ?? restoredState());
+  const [solo, setSolo] = useState<SoloClientSession | undefined>(initialSolo);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [soloSetupOpen, setSoloSetupOpen] = useState(false);
+  const [soloBusy, setSoloBusy] = useState(false);
+  const [soloStartMapUrl, setSoloStartMapUrl] = useState('');
+  const [soloStartPosition, setSoloStartPosition] = useState<Position | undefined>();
+  const [soloDateTime, setSoloDateTime] = useState(() => defaultSfDateTime());
+  const [finishMapUrl, setFinishMapUrl] = useState('');
+  const [currentLocationVisible, setCurrentLocationVisible] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<Position | undefined>();
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [message, setMessage] = useState('');
   const [selectedStation, setSelectedStation] = useState(validStations[0]?.id ?? '');
@@ -315,16 +354,51 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (!solo) {
+      localStorage.removeItem(SOLO_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(SOLO_STORAGE_KEY, JSON.stringify({ ...solo, boardState: state }));
+  }, [solo, state]);
+
+  useEffect(() => {
     if (!scopedStations.some((station) => station.id === selectedStation)) {
       setSelectedStation(scopedStations[0]?.id ?? '');
     }
   }, [scopedStations, selectedStation]);
 
   useEffect(() => {
-    const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+    if (!currentLocationVisible) return;
+    if (!navigator.geolocation) {
+      setMessage('Current location is unavailable in this browser.');
+      setCurrentLocationVisible(false);
+      return;
+    }
+    const watchId = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        const position = { lat: coords.latitude, lng: coords.longitude };
+        if (!insideSanFrancisco(position)) {
+          setMessage('Your current location is outside the San Francisco map bounds.');
+          setCurrentLocationVisible(false);
+          return;
+        }
+        setCurrentLocation(position);
+        mapRef.current?.panTo(position);
+      },
+      () => {
+        setMessage('Current location was not available. Check the browser location permission and try again.');
+        setCurrentLocationVisible(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [currentLocationVisible]);
+
+  useEffect(() => {
+    const key = import.meta.env.VITE_GOOGLE_MAPS_BROWSER_API_KEY ?? import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
     if (!key) {
       setStatus('error');
-      setMessage('Add VITE_GOOGLE_MAPS_API_KEY to .env to load the map.');
+      setMessage('Add VITE_GOOGLE_MAPS_BROWSER_API_KEY to .env to load the map.');
       return;
     }
     let cancelled = false;
@@ -463,6 +537,13 @@ export default function App() {
         });
       }
     });
+    if (currentLocationVisible && currentLocation) {
+      data.addGeoJson({
+        type: 'Feature',
+        properties: { kind: 'current-location' },
+        geometry: { type: 'Point', coordinates: [currentLocation.lng, currentLocation.lat] },
+      });
+    }
     const displayedArea = state.areaDisplayMode === 'excluded-red'
       ? { area: excluded, kind: 'excluded' }
       : { area: feasible, kind: 'feasible' };
@@ -498,6 +579,19 @@ export default function App() {
       if (kind === 'trace-point') {
         const endpoint = feature.getProperty('endpoint');
         return { icon: { path: google.maps.SymbolPath.CIRCLE, fillColor: endpoint ? '#e11d48' : '#ffffff', fillOpacity: 1, strokeColor: '#e11d48', strokeWeight: 2, scale: endpoint ? 5 : 3 }, zIndex: 21 };
+      }
+      if (kind === 'current-location') {
+        return {
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            fillColor: '#0ea5e9',
+            fillOpacity: 1,
+            strokeColor: '#ffffff',
+            strokeWeight: 3,
+            scale: 7,
+          },
+          zIndex: 40,
+        };
       }
       if (kind === 'transit-route') {
         const mode = feature.getProperty('mode');
@@ -552,7 +646,7 @@ export default function App() {
       const areaName = event.feature.getProperty('areaName');
       if (typeof areaName === 'string') setMessage(areaName);
     });
-  }, [eligibleIds, excluded, feasible, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
+  }, [currentLocation, currentLocationVisible, eligibleIds, excluded, feasible, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
@@ -564,7 +658,7 @@ export default function App() {
 
   const add = () => {
     const kind = (document.querySelector('#kind') as HTMLSelectElement).value as QuestionKind;
-    const category = defaultCategory(kind);
+    const category = solo && kind === 'photo-reference' ? 'cardinal-view' : defaultCategory(kind);
     const origin = state.viewport.center;
     const regionId = category ? nearestPoi(category, origin)?.id : undefined;
     setState((current) => ({
@@ -689,16 +783,162 @@ export default function App() {
     });
   };
 
+  const startSolo = async () => {
+    if (!soloStartPosition) {
+      setMessage('Set the Solo starting location first.');
+      return;
+    }
+    try {
+      setSoloBusy(true);
+      const departureTime = sfLocalDateTimeToIso(soloDateTime);
+      const response = await fetch('/api/solo/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ origin: soloStartPosition, departureTime }),
+      });
+      const body = await response.json() as SoloStartResponse & { error?: string };
+      if (!response.ok || !body.token) throw new Error(body.error ?? 'The AI could not choose a hiding spot.');
+      const boardState = {
+        ...soloStateForNewGame(state),
+        viewport: { center: soloStartPosition, zoom: 13 },
+      };
+      const session: SoloClientSession = {
+        ...body,
+        questions: {},
+        humanState: state,
+        boardState,
+      };
+      setState(boardState);
+      setSolo(session);
+      setSoloSetupOpen(false);
+      setMenuOpen(false);
+      mapRef.current?.panTo(soloStartPosition);
+      mapRef.current?.setZoom(13);
+      setMessage('The AI committed to a reachable hiding spot. Seeking starts now.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The AI could not start a Solo game.');
+    } finally {
+      setSoloBusy(false);
+    }
+  };
+
+  const askSolo = async (constraint: Constraint) => {
+    if (!solo || solo.questions[constraint.id]) return;
+    try {
+      setSoloBusy(true);
+      const response = await fetch('/api/solo/question', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: solo.token, constraint }),
+      });
+      const body = await response.json() as {
+        token?: string; answer?: Constraint['answer']; displayText?: string; resolvedRegionId?: string;
+        photoUrl?: string; repetition?: number; cardsDrawn?: number; totalCardsDrawn?: number; error?: string;
+      };
+      if (!response.ok || !body.token || !body.answer || !body.displayText) throw new Error(body.error ?? 'The AI could not answer.');
+      patchConstraint(constraint.id, { answer: body.answer, ...(body.resolvedRegionId ? { regionId: body.resolvedRegionId } : {}) });
+      const record: SoloQuestionRecord = {
+        id: constraint.id,
+        displayText: body.displayText,
+        repetition: body.repetition ?? 1,
+        cardsDrawn: body.cardsDrawn ?? 0,
+        photoUrl: body.photoUrl,
+      };
+      setSolo((current) => current ? {
+        ...current,
+        token: body.token!,
+        cardsDrawn: body.totalCardsDrawn ?? current.cardsDrawn,
+        questions: { ...current.questions, [constraint.id]: record },
+      } : current);
+      setMessage(`AI answered · drew ${record.cardsDrawn} card${record.cardsDrawn === 1 ? '' : 's'}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The AI could not answer.');
+    } finally {
+      setSoloBusy(false);
+    }
+  };
+
+  const applySoloResult = async (body: {
+    token?: string; phase?: SoloClientSession['phase']; message?: string;
+    reveal?: SoloClientSession['reveal']; error?: string;
+  }) => {
+    if (!solo || !body.token || !body.phase) throw new Error(body.error ?? 'The Solo response was incomplete.');
+    let reveal = body.reveal;
+    if (reveal) reveal = { ...reveal, commitmentValid: await verifyRevealCommitment(reveal) };
+    setSolo((current) => current ? { ...current, token: body.token!, phase: body.phase!, reveal: reveal ?? current.reveal } : current);
+    if (body.message) setMessage(body.message);
+  };
+
+  const checkSoloPosition = async (position: Position) => {
+    if (!solo) return;
+    try {
+      setSoloBusy(true);
+      const response = await fetch('/api/solo/check-location', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: solo.token, position }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? 'Could not check this location.');
+      await applySoloResult(body);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not check this location.');
+    } finally {
+      setSoloBusy(false);
+    }
+  };
+
+  const checkSoloCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setMessage('Location is unavailable. Open the pin fallback and paste your current Google Maps location.');
+      return;
+    }
+    setSoloBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => { setSoloBusy(false); void checkSoloPosition({ lat: coords.latitude, lng: coords.longitude }); },
+      () => { setSoloBusy(false); setMessage('Location permission was denied. Use the Google Maps pin fallback.'); },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
+
+  const giveUpSolo = async () => {
+    if (!solo || !confirm('Give up and reveal the AI hider’s committed location?')) return;
+    try {
+      setSoloBusy(true);
+      const response = await fetch('/api/solo/reveal', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: solo.token }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? 'Could not reveal the Solo location.');
+      await applySoloResult(body);
+      setMessage('The AI hiding spot has been revealed.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not reveal the Solo location.');
+    } finally {
+      setSoloBusy(false);
+    }
+  };
+
+  const exitSolo = () => {
+    if (!solo) return;
+    if (!solo.reveal && !confirm('Exit this Solo game? Its secret session will be discarded.')) return;
+    setState(solo.humanState);
+    setSolo(undefined);
+    setMenuOpen(false);
+    setFinishMapUrl('');
+    setMessage('Returned to the previous human-mode workspace.');
+  };
+
   const share = async () => {
     const url = new URL(location.href);
-    const shareState = { ...state, hiderPosition: undefined, hiderMapUrl: undefined };
+    const sourceState = solo?.humanState ?? state;
+    const shareState = { ...sourceState, hiderPosition: undefined, hiderMapUrl: undefined };
     url.searchParams.set('config', encodeState(shareState));
     history.replaceState({}, '', url);
     try {
       await navigator.clipboard?.writeText(url.href);
-      setMessage('Share URL copied. Your hider position was not included.');
+      setMessage(solo ? 'Share URL copied. The Solo session and hiding secret were not included.' : 'Share URL copied. Your hider position was not included.');
     } catch {
-      setMessage('Share URL is ready in the address bar. Your hider position was not included.');
+      setMessage(solo ? 'Share URL is ready. The Solo session and hiding secret were not included.' : 'Share URL is ready in the address bar. Your hider position was not included.');
     }
   };
 
@@ -707,16 +947,44 @@ export default function App() {
       <header>
         <div>
           <h1>SF Hiding Area</h1>
-          <p>Rulebook-aware mapping for seekers and hiders.</p>
+          <p>{solo ? 'Solo game · human seekers vs. AI hider.' : 'Rulebook-aware mapping for seekers and hiders.'}</p>
         </div>
-        <button onClick={share} aria-label="Copy shareable configuration URL">Share</button>
+        <div className="header-menu">
+          <button className="menu-trigger" onClick={() => setMenuOpen((open) => !open)} aria-expanded={menuOpen} aria-label="Open game menu">•••</button>
+          {menuOpen && <div className="menu-popover" role="menu">
+            <button type="button" role="menuitem" onClick={() => { void share(); setMenuOpen(false); }}>Share map</button>
+            {!solo && <button type="button" role="menuitem" onClick={() => { setSoloSetupOpen(true); setMenuOpen(false); }}>Start Solo game</button>}
+            {solo && <button type="button" role="menuitem" onClick={giveUpSolo} disabled={!!solo.reveal || soloBusy}>Give up & reveal</button>}
+            {solo && <button type="button" role="menuitem" onClick={exitSolo}>Exit Solo</button>}
+          </div>}
+        </div>
       </header>
-      <nav className="mode-switch" aria-label="Player mode">
+      {solo ? <nav className="solo-status" aria-label="Solo game status">
+        <span><b>{solo.phase === 'end-game' ? 'End game' : solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Revealed' : 'Seeking'}</b><small>{solo.cardsDrawn} cards drawn</small></span>
+        <button type="button" onClick={checkSoloCurrentLocation} disabled={soloBusy || !!solo.reveal}>{soloBusy ? 'Checking…' : 'Check my location'}</button>
+      </nav> : <nav className="mode-switch" aria-label="Player mode">
         <button className={state.mode === 'seeker' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'seeker' }))}>Seeker</button>
         <button className={state.mode === 'hider' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'hider' }))}>Hider answer helper</button>
-      </nav>
+      </nav>}
       <div className="layout">
         <aside aria-label="Question constraint controls">
+          {solo && <section className="panel solo-panel">
+            <h2>AI hider</h2>
+            <p className="helper">The hiding spot is sealed by commitment <code>{solo.commitment.slice(0, 12)}…</code>. Questions use the normal small-game card costs; cards are counted but never drawn or played.</p>
+            {!solo.reveal && <details>
+              <summary>GPS fallback: check a pasted pin</summary>
+              <MapLinkField label="My current Google Maps pin" value={finishMapUrl} onChange={setFinishMapUrl} onResolved={(position) => void checkSoloPosition(position)} onMessage={setMessage} />
+            </details>}
+            {solo.reveal && <div className="solo-reveal">
+              <h3>{solo.reveal.reason === 'found' ? 'AI hider found' : 'Hiding spot revealed'}</h3>
+              <p><b>{solo.reveal.station.name}</b></p>
+              <p className={solo.reveal.commitmentValid ? 'success-line' : 'warning-line'}>{solo.reveal.commitmentValid ? 'Commitment verified — the location did not change.' : 'Commitment verification failed.'}</p>
+              <img src={solo.reveal.panorama.imageUrl} alt="Street View at the revealed AI hiding spot" />
+              <a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open exact hiding pin</a>
+              <dl><div><dt>Departure</dt><dd>{new Date(solo.reveal.route.departureTime).toLocaleString()}</dd></div><div><dt>Arrival</dt><dd>{new Date(solo.reveal.route.arrivalTime).toLocaleString()}</dd></div><div><dt>Journey</dt><dd>{Math.round(solo.reveal.route.durationSeconds / 60)} min · {solo.reveal.route.summary.join(' → ')}</dd></div><div><dt>Imagery</dt><dd>{solo.reveal.panorama.date ?? 'date unavailable'}</dd></div></dl>
+              <details><summary>Verification proof</summary><code className="proof">{solo.reveal.commitment}</code><p className="helper">Session {solo.reveal.sessionId}<br />Salt {solo.reveal.salt}</p></details>
+            </div>}
+          </section>}
           {state.mode === 'hider' && (
             <section className="panel hider-panel">
               <h2>Hider position</h2>
@@ -757,12 +1025,14 @@ export default function App() {
               <label className="toggle"><input type="checkbox" checked={!!state.layers['transit-routes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'transit-routes': event.target.checked } }))} />Light rail + Rapid Muni</label>
               {state.transitScope === 'all' && <label className="toggle"><input type="checkbox" checked={!!state.layers['other-transit-routes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'other-transit-routes': event.target.checked } }))} />Other transit</label>}
               <label className="toggle"><input type="checkbox" checked={!!state.layers.coastline} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, coastline: event.target.checked } }))} />Coastline</label>
+              <label className="toggle"><input type="checkbox" checked={currentLocationVisible} onChange={(event) => setCurrentLocationVisible(event.target.checked)} />My current location</label>
             </div>
             <div className="inline-controls">
               <label>Hiding-zone radius (miles)<input type="number" min="0.05" max="5" step="0.05" value={state.stationZoneMiles} onChange={(event) => setState((current) => ({ ...current, stationZoneMiles: Math.max(0.05, Number(event.target.value) || 0.25) }))} /></label>
               <label>Area shading<select value={state.areaDisplayMode} onChange={(event) => setState((current) => ({ ...current, areaDisplayMode: event.target.value as AreaDisplayMode }))}><option value="allowed-green">Allowed green · excluded transparent</option><option value="excluded-red">Allowed transparent · excluded red</option></select></label>
             </div>
             <p className="helper">{eligibleIds.length} of {scopedStations.length} stations currently possible. A station turns off when its hiding-radius zone no longer overlaps the green feasible area; explicit station and route cuts also apply.</p>
+            <p className="helper">The current-location layer stays on this device and is never included in shared URLs.</p>
           </details>
 
           <details className="panel">
@@ -824,7 +1094,11 @@ export default function App() {
               const usesDistance = ['radar', 'thermometer', 'radius', 'tentacle', 'closer', 'farther', 'intersection', 'exclusion'].includes(constraint.kind) || (constraint.kind === 'matching-region' && constraint.category === 'transit-route');
               const usesCategory = ['matching-region', 'measuring', 'tentacle', 'photo-reference'].includes(constraint.kind);
               const category = constraint.category;
-              const categoryChoices = subjectChoices(constraint.kind);
+              const askedRecord = solo?.questions[constraint.id];
+              const categoryChoices = solo && constraint.kind === 'photo-reference' ? soloPhotoChoices : subjectChoices(constraint.kind);
+              const questionNotes = solo && constraint.kind === 'photo-reference'
+                ? ['Solo house rule: Google Street View replaces a live hider photo.', 'The server uses the committed outdoor panorama and never exposes its coordinate-bearing Google request URL.', 'If imagery becomes unavailable, “I cannot answer” remains a valid answer.']
+                : definition.notes;
               const selectedSubject = categoryChoices.find((subject) => subject.id === category);
               const tentacleChoices = constraint.kind === 'tentacle' && category !== 'transit-route'
                 ? pois.filter((poi) => poi.category === category && turf.distance([constraint.origin.lng, constraint.origin.lat], [poi.lng, poi.lat], { units: 'miles' }) <= (constraint.distanceMiles ?? 1))
@@ -844,22 +1118,25 @@ export default function App() {
                         : sourcePoi?.name;
               return (
                 <article key={constraint.id}>
-                  <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
+                  <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
                   <p className="question-help">{definition.help}</p>
                   {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition ? '' : 'waiting'}`}><span>Hider answer</span><strong>{state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
+                  {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={`${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
-                    {constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
-                    {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
+                    {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
+                    {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
                     {constraint.kind === 'direction' && <label>Direction<select value={constraint.direction} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'south', 'east', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
-                    {usesCategory && <label className="wide">Subject<select value={category} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? (constraint.kind === 'tentacle' ? primaryTransitRoutes[0]?.id : scopedRoutes[0]?.id) : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
-                    {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s transit service<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{scopedRoutes.map((route) => <option key={route.id} value={route.id}>{transitRouteLabel(route)}</option>)}</select></label>}
-                    {constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
+                    {usesCategory && <label className="wide">Subject<select value={category} disabled={!!askedRecord} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? (constraint.kind === 'tentacle' ? primaryTransitRoutes[0]?.id : scopedRoutes[0]?.id) : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
+                    {solo && constraint.kind === 'photo-reference' && category === 'cardinal-view' && <label className="wide">Direction<select value={constraint.direction} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'east', 'south', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
+                    {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s transit service<select value={constraint.regionId ?? ''} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{scopedRoutes.map((route) => <option key={route.id} value={route.id}>{transitRouteLabel(route)}</option>)}</select></label>}
+                    {!solo && constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{matchingSource ?? 'set the seeker pin'}</b></p>}
-                  {usesOrigin && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
-                  {usesTarget && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
-                  <details className="rule-notes"><summary>Rulebook notes</summary>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate map support' : selectedSubject.support === 'reference' ? 'Reference card' : 'Mapped exactly'}</b></p>}<ul>{orderedRuleNotes(constraint.kind, definition.notes, selectedSubject?.notes).map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</details>
-                  <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>
+                  {usesOrigin && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
+                  {usesTarget && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
+                  {solo && !askedRecord && <button type="button" className="full keep" disabled={soloBusy || !!solo.reveal} onClick={() => void askSolo(constraint)}>{soloBusy ? 'AI is answering…' : 'Ask AI'}</button>}
+                  <details className="rule-notes"><summary>Rulebook notes</summary>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate map support' : selectedSubject.support === 'reference' ? 'Reference card' : 'Mapped exactly'}</b></p>}<ul>{orderedRuleNotes(constraint.kind, questionNotes, selectedSubject?.notes).map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</details>
+                  {!askedRecord && <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>}
                 </article>
               );
             })}
@@ -887,6 +1164,26 @@ export default function App() {
           <div className="attribution">POIs: linked SF dataset · routes/coast: DataSF · basemap © Google</div>
         </section>
       </div>
+      {soloSetupOpen && <div className="modal-backdrop" role="presentation">
+        <section className="modal" role="dialog" aria-modal="true" aria-labelledby="solo-setup-title">
+          <h2 id="solo-setup-title">Start Solo game</h2>
+          <p className="helper">The AI will use walking and public transit to choose a committed hiding station reachable within 30 minutes. Seeking begins immediately after the route is simulated.</p>
+          <MapLinkField
+            label="Starting location"
+            value={soloStartMapUrl}
+            onChange={setSoloStartMapUrl}
+            onResolved={(position) => { setSoloStartPosition(position); mapRef.current?.panTo(position); }}
+            onMessage={setMessage}
+          />
+          {soloStartPosition && <p className="success-line">Starting location ready</p>}
+          <label className="stacked solo-datetime">Date and time · San Francisco<input type="datetime-local" value={soloDateTime} onChange={(event) => setSoloDateTime(event.target.value)} /></label>
+          <p className="helper">Google transit schedules support 7 days in the past through 100 days ahead.</p>
+          <div className="two-buttons modal-actions">
+            <button type="button" className="secondary" disabled={soloBusy} onClick={() => setSoloSetupOpen(false)}>Cancel</button>
+            <button type="button" className="keep" disabled={soloBusy || !soloStartPosition} onClick={() => void startSolo()}>{soloBusy ? 'Finding a hiding spot…' : 'Start seeking'}</button>
+          </div>
+        </section>
+      </div>}
       {message && status === 'ready' && <button className="toast" role="status" onClick={() => setMessage('')} aria-label="Dismiss message">{message}</button>}
     </main>
   );

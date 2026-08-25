@@ -6,6 +6,7 @@ export type QuestionDefinition = {
   notes: string[];
   sourceUrl?: string;
   drawInstruction?: string;
+  baseDrawCount?: number;
   timeLimit?: string;
 };
 
@@ -27,6 +28,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'The hider answers yes or no.',
     ],
     drawInstruction: 'Draw 2, keep 1',
+    baseDrawCount: 2,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/radar_questions/',
   },
@@ -41,6 +43,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'Game modification: custom thermometer distances are allowed when the players agree on the distance.',
     ],
     drawInstruction: 'Draw 2, keep 1',
+    baseDrawCount: 2,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/thermometer_questions/',
   },
@@ -55,6 +58,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'Rail stations include light rail, heavy rail, metros, and subways.',
     ],
     drawInstruction: 'Draw 3, keep 1',
+    baseDrawCount: 3,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/measuring_questions/',
   },
@@ -70,6 +74,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'The straight southern county boundary is excluded from the DataSF shoreline geometry.',
     ],
     drawInstruction: 'Draw 3, keep 1',
+    baseDrawCount: 3,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/measuring_questions/',
   },
@@ -85,6 +90,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'Map-icon categories include mountains, parks, and other agreed POIs.',
     ],
     drawInstruction: 'Draw 3, keep 1',
+    baseDrawCount: 3,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/matching_questions/',
   },
@@ -100,6 +106,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'The hider names the answer and may use a map. The response does not reveal the hider’s exact location.',
     ],
     drawInstruction: 'Draw 4, keep 2',
+    baseDrawCount: 4,
     timeLimit: '5 minutes',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/tentacle_questions/',
   },
@@ -116,6 +123,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
       'Photos do not create a deterministic geographic polygon, so this card is recorded but not shaded.',
     ],
     drawInstruction: 'Draw 1, keep 1',
+    baseDrawCount: 1,
     timeLimit: '10 minutes for the SF small game',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/photo_questions/',
   },

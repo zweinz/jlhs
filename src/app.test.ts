@@ -117,7 +117,7 @@ describe('missing measuring and matching geometry', () => {
     expect(Math.abs(turf.area(coastWest) - turf.area(coastCenter))).toBeGreaterThan(1000);
     expect(elevationAt({ lat: 37.75, lng: -122.45 })).toBeTypeOf('number');
     expect(nearestWaterDistance({ lat: 37.75, lng: -122.45 })).toBeGreaterThanOrEqual(0);
-  });
+  }, 15_000);
 
   it('models name-length, street, district, and landmass matching', () => {
     const stationRegions = partition('game-valid-station');

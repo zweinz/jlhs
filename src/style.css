@@ -44,6 +44,23 @@ header {
   color: white;
 }
 header p { display: none; font-size: .88rem; opacity: .9; }
+.header-menu { position: relative; }
+.menu-trigger { min-width: 44px; padding-inline: .7rem; letter-spacing: .08em; }
+.menu-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + .45rem);
+  right: 0;
+  display: grid;
+  min-width: 190px;
+  padding: .35rem;
+  border: 1px solid #cbd5e1;
+  border-radius: .7rem;
+  background: white;
+  box-shadow: 0 8px 28px #0004;
+}
+.menu-popover button { min-height: 40px; background: white; color: #173f75; text-align: left; }
+.menu-popover button:hover { background: #e5edf7; }
 
 .mode-switch {
   position: sticky;
@@ -58,6 +75,22 @@ header p { display: none; font-size: .88rem; opacity: .9; }
 }
 .mode-switch button { min-height: 40px; padding: .45rem; background: #fff; color: #173f75; border: 1px solid #b6c5d5; }
 .mode-switch button.active { background: #173f75; color: #fff; }
+.solo-status {
+  position: sticky;
+  z-index: 9;
+  top: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  min-height: 54px;
+  padding: .4rem .65rem;
+  background: #ecfdf5;
+  border-bottom: 1px solid #a7f3d0;
+}
+.solo-status span { display: grid; }
+.solo-status small { color: #586573; font-size: .72rem; }
+.solo-status button { min-height: 40px; padding-block: .4rem; background: #166534; }
 
 .layout { display: flex; flex-direction: column; }
 .map-wrap {
@@ -190,6 +223,7 @@ article {
 .answer-result { display: grid; gap: .1rem; margin: .55rem 0; padding: .6rem; border-left: 4px solid #166534; border-radius: .4rem; background: #eaf7ee; }
 .answer-result span { color: #3f4d5a; font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .answer-result strong { color: #14532d; }
+.answer-result .solo-photo { width: 100%; margin-top: .5rem; border-radius: .45rem; }
 .answer-result.waiting { border-color: #b45309; background: #fff7e7; }
 .answer-result.waiting strong { color: #92400e; }
 .map-link-field {
@@ -332,6 +366,40 @@ article {
   box-shadow: 0 4px 18px #0004;
 }
 
+.solo-panel code { overflow-wrap: anywhere; }
+.solo-panel > details { margin-top: .65rem; }
+.solo-panel > details summary { cursor: pointer; font-size: .82rem; font-weight: 750; }
+.solo-reveal { display: grid; gap: .5rem; }
+.solo-reveal img { width: 100%; border-radius: .55rem; border: 1px solid #cbd5e1; }
+.solo-reveal dl { display: grid; gap: .4rem; margin: .25rem 0; }
+.solo-reveal dl div { display: grid; grid-template-columns: 78px 1fr; gap: .4rem; font-size: .78rem; }
+.solo-reveal dt { color: #586573; font-weight: 750; }
+.solo-reveal dd { margin: 0; }
+.proof { display: block; margin-top: .4rem; padding: .45rem; border-radius: .35rem; background: #f1f5f9; font-size: .7rem; }
+.warning-line { color: #9b1c1c; font-size: .82rem; font-weight: 750; }
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: #0f172a99;
+}
+.modal {
+  width: min(100%, 480px);
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  padding: 1rem;
+  border-radius: .9rem;
+  background: white;
+  box-shadow: 0 20px 60px #0006;
+}
+.solo-datetime { margin-top: .8rem; }
+.solo-datetime input { width: 100%; }
+.modal-actions { margin-top: 1rem; }
+
 @media (min-width: 540px) {
   header { padding-inline: 1rem; }
   header p { display: block; }
@@ -344,6 +412,7 @@ article {
 @media (min-width: 820px) {
   header { position: relative; min-height: 76px; padding: 1rem 1.25rem; }
   .mode-switch { position: relative; top: 0; width: 390px; padding: .4rem 1rem; background: #f7f8fa; }
+  .solo-status { position: relative; top: 0; width: 390px; padding-inline: 1rem; }
   h1 { font-size: 1.45rem; }
   .layout {
     display: grid;

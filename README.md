@@ -4,7 +4,7 @@ A responsive React + TypeScript + Vite browser application that models San Franc
 
 ## Local development
 
-Requires Node.js 20+. The checked-out local installation lives at `~/Sites/jlhs`. Copy `.env.example` to `.env`, add a Google Maps JavaScript API browser key, and restrict that key to your development and production origins. Credentials are ignored by Git.
+Requires Node.js 20+. The checked-out local installation lives at `~/Sites/jlhs`. Copy `.env.example` to `.env`. Add a Google Maps JavaScript API browser key restricted to your development and production origins, a separate server key restricted to Routes API and Street View Static API, and a random Solo-session secret containing at least 24 characters. Credentials are ignored by Git.
 
 ```bash
 cp .env.example .env
@@ -12,11 +12,11 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL. Without a key the app deliberately shows an actionable error state. Run tests with `npm test`, produce an optimized bundle with `npm run build`, and inspect it locally with `npm run preview`.
+Open the Vite URL. Without a key the app deliberately shows an actionable error state. Vite's development middleware mounts the same `/api/*` handlers used in production, so shortened-map-link resolution and Solo mode work on the same local origin. Run tests with `npm test`, produce an optimized bundle with `npm run build`, and inspect it locally with `npm run preview`.
 
 ## Deployment
 
-The production deployment uses Vercel's free Hobby tier. Import the GitHub repository, keep the detected Vite settings (`npm run build`, output directory `dist`), and add `VITE_GOOGLE_MAPS_API_KEY` for Production, Preview, and Development. Because the key is delivered to browsers, protect it with Google Cloud HTTP-referrer restrictions for `http://localhost:*/*`, the production Vercel origin, and preview deployments, plus an API restriction to Maps JavaScript API.
+The production deployment uses Vercel's free Hobby tier. Import the GitHub repository, keep the detected Vite settings (`npm run build`, output directory `dist`), and add `VITE_GOOGLE_MAPS_BROWSER_API_KEY`, `GOOGLE_MAPS_SERVER_API_KEY`, and `SOLO_SESSION_SECRET` for Production, Preview, and Development. Because the browser key is public, protect it with Google Cloud HTTP-referrer restrictions for `http://localhost/*`, `http://127.0.0.1/*`, the production Vercel origin, and preview deployments, plus an API restriction to Maps JavaScript API. Restrict the server key to Routes API and Street View Static API. During secret rotation, temporarily set `SOLO_SESSION_SECRET_PREVIOUS` so active sessions remain readable for their 48-hour lifetime.
 
 ## Data and architecture
 
@@ -35,6 +35,12 @@ The 193 spreadsheet-defined stations have touch-friendly markers and configurabl
 Every pin field accepts full or shortened Google Maps location links, includes an in-field × clear action, and can use the device’s current location with browser permission. Full links are parsed in the browser; `/api/resolve-map-link` follows only allow-listed Google Maps short links and returns the shared pin coordinates. Address-only redirects use the free, keyless U.S. Census geocoder, while arbitrary resolver hosts remain blocked. The layout is mobile-first: the map is placed before the controls on small screens, controls use touch-sized targets, and long layer/legend sections collapse. Hiding-zone radii are initially hidden and can be enabled from the transit layer panel.
 
 Hider mode accepts a Google Maps pin or browser geolocation and calculates answers for radar, thermometer, all in-play SF measuring subjects (including Sea Level, Body of Water, and Coastline), all mapped matching subjects, and tentacles. It does not silently write those calculated answers into the seeker state. Its local path tracer lets a hider tap a street/path from intersection to intersection, undo points, see live feet/miles, and fit the result. A trace-only Screenshot view blanks the basemap and suppresses every other application layer so the result can be captured without revealing the location; the path is intentionally excluded from shared URLs. Photo questions retain their exact framing/content notes but do not otherwise produce a geographic polygon.
+
+## Solo mode
+
+Solo mode is launched from the compact header menu and temporarily replaces the player switch while preserving the prior human workspace. A Vercel Edge endpoint checks all 193 stations with Google Routes in transit-matrix batches, verifies that the selected sub-30-minute itinerary contains a real transit leg, and chooses a strategically weighted station with at least three outdoor Street View panoramas inside its quarter-mile zone. The exact station, panorama, itinerary, card ledger, and reveal state live only in an AES-GCM encrypted, 48-hour session token; the browser displays a SHA-256 commitment and cannot read the secret payload.
+
+The existing question editor becomes a draft-and-ask flow during Solo play. Successful AI answers are solved by the same structured rules engine used by Hider Helper, locked into the question log, and shaded on the map. Only total cards drawn are tracked, including repeated-card multipliers. Solo photo questions are a clearly labeled house rule using six deterministic Street View camera definitions. Images are proxied with no-store caching so coordinate-bearing Google request URLs and the server key never reach the browser. GPS or a pasted current-location pin starts the end game inside the station zone and reveals a commitment-verified proof within 30 meters; Give Up provides an explicit reveal path.
 
 ## Retrospective transit reachability
 
