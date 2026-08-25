@@ -83,6 +83,11 @@ describe('SF rulebook audit', () => {
 
     const transitMatch = { ...base('matching-region'), category: 'transit-route', regionId: 'N', originSet: false };
     expect(questionIsReady(transitMatch)).toBe(true);
+
+    const endGame = { ...base('endgame-confirmation'), originSet: false, answerSet: false, enabled: false };
+    expect(missingQuestionFields(endGame)).toEqual(['end-zone pin', 'hider result']);
+    expect(questionIsReady({ ...endGame, originSet: true, answerSet: true })).toBe(true);
+    expect(turf.area(combineConstraints([{ ...endGame, originSet: true, answerSet: true, enabled: true }]))).toBeCloseTo(turf.area(sfFrame()));
   });
 
   it('uses the exact question draw/pick costs without inventing rewards', () => {
@@ -376,6 +381,7 @@ const state: SharedState = {
   transitScope: 'all',
   stationStatuses: {},
   routeStatuses: {},
+  endGameActive: false,
 };
 
 it('round trips versioned shared state', () => expect(decodeState(encodeState(state))).toEqual(state));

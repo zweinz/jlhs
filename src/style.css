@@ -91,6 +91,17 @@ header p { display: none; font-size: .88rem; opacity: .9; }
 .solo-status span { display: grid; }
 .solo-status small { color: #586573; font-size: .72rem; }
 .solo-status button { min-height: 40px; padding-block: .4rem; background: #166534; }
+.human-endgame-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .45rem .75rem;
+  color: #14532d;
+  background: #dcfce7;
+  border-bottom: 1px solid #86efac;
+}
+.human-endgame-status button { min-height: 34px; padding: .3rem .65rem; }
 
 .layout { display: flex; flex-direction: column; }
 .map-wrap {

@@ -55,6 +55,7 @@ export default async function handler(request: Request) {
       departureTime: departure.toISOString(),
       salt,
       commitment: '',
+      commitmentVersion: 2,
       phase: 'seeking',
       cardsDrawn: 0,
       cardsKept: 0,

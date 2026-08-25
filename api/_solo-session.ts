@@ -12,6 +12,7 @@ export type SecretSoloSession = {
   departureTime: string;
   salt: string;
   commitment: string;
+  commitmentVersion?: 1 | 2;
   phase: SoloPhase;
   cardsDrawn: number;
   cardsKept?: number;
@@ -100,7 +101,7 @@ export async function unseal<T extends SecretSoloSession | PhotoAsset>(token: st
 }
 
 function commitmentObject(session: Pick<SecretSoloSession,
-  'sessionId' | 'departureTime' | 'station' | 'spot' | 'panorama' | 'route' | 'salt'>) {
+  'sessionId' | 'departureTime' | 'station' | 'spot' | 'panorama' | 'route' | 'salt' | 'commitmentVersion' | 'stationPanorama'>) {
   return {
     sessionId: session.sessionId,
     departureTime: session.departureTime,
@@ -109,6 +110,10 @@ function commitmentObject(session: Pick<SecretSoloSession,
     panorama: session.panorama,
     route: session.route,
     salt: session.salt,
+    ...(session.commitmentVersion === 2 ? {
+      commitmentVersion: 2,
+      stationPanorama: session.stationPanorama,
+    } : {}),
   };
 }
 

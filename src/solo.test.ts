@@ -68,13 +68,24 @@ describe('Solo camera and time rules', () => {
 
   it('maps the supported Solo inventory to actual rulebook photo cards', () => {
     expect(SOLO_PHOTO_SUBJECTS.map((subject) => subject.id)).toEqual([
-      'any-building-visible-from-station',
-      'widest-street',
       'a-tree',
-      'tallest-structure-in-your-sightline',
       'the-sky',
+      'you',
+      'widest-street',
+      'tallest-structure-in-your-sightline',
+      'any-building-visible-from-station',
       'tallest-building-visible-from-station',
+      'trace-nearest-street-path',
       'two-buildings',
+      'restaurant-interior',
+      'park',
+      'grocery-store-aisle',
+      'place-of-worship',
+      'train-platform',
+      'half-mile-of-streets-traced',
+      'tallest-mountain-visible-from-station',
+      'biggest-body-of-water-in-your-zone',
+      'five-buildings',
     ]);
   });
 
@@ -83,12 +94,13 @@ describe('Solo camera and time rules', () => {
     const tallestBuilding = soloPhotoPlan('tallest-building-visible-from-station', spot, station, 'north', 42);
     const tree = soloPhotoPlan('a-tree', spot, station, 'north', 42);
     expect(anyBuilding.source).toBe('station');
-    expect(anyBuilding.displayText).toMatch(/at the hiding station/);
+    expect(anyBuilding.displayText).toMatch(/at the central station/);
     expect(tallestBuilding.source).toBe('station');
     expect(tallestBuilding.heading).not.toBe(anyBuilding.heading);
     expect(tree.source).toBe('spot');
-    expect(tree.displayText).toMatch(/committed hiding spot/);
+    expect(tree.displayText).toMatch(/at the hiding location/);
     expect(soloPhotoPlan('the-sky', spot, station, 'north', 42).pitch).toBe(90);
+    expect(soloPhotoPlan('restaurant-interior', spot, station, 'north', 42).unavailableReason).toMatch(/outdoor/i);
   });
 
   it('keeps legacy toward and away views visually distinct while migrating old drafts', () => {
@@ -227,7 +239,7 @@ describe('Solo token and commitment security', () => {
   const session = (): SecretSoloSession => ({
     kind: 'solo-session', version: 1, sessionId: 'session', createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 60_000).toISOString(), departureTime: '2026-08-24T19:00:00.000Z',
-    salt: 'salt', commitment: '', phase: 'seeking', cardsDrawn: 0, questionUses: {}, wideHeading: 42,
+    salt: 'salt', commitment: '', commitmentVersion: 2, phase: 'seeking', cardsDrawn: 0, questionUses: {}, wideHeading: 42,
     station: { id: 'station', name: 'Station', position: { lat: 37.78, lng: -122.44 } },
     spot: { lat: 37.779, lng: -122.441 }, panorama: { id: 'pano', date: '2026-01' },
     stationPanorama: { id: 'station-pano', date: '2026-01' },
@@ -251,6 +263,7 @@ describe('Solo token and commitment security', () => {
     const reveal: SoloReveal = {
       reason: 'found', station: value.station, spot: value.spot,
       panorama: { ...value.panorama, imageUrl: '/api/solo/photo?token=opaque' }, route: value.route,
+      stationPanorama: value.stationPanorama, commitmentVersion: value.commitmentVersion,
       sessionId: value.sessionId, salt: value.salt, commitment: value.commitment,
     };
     await expect(verifyRevealCommitment(reveal)).resolves.toBe(true);
@@ -312,10 +325,59 @@ describe('Solo token and commitment security', () => {
     const otherStationPhoto = await askPhoto('tallest-building-visible-from-station');
     const spotPhoto = await askPhoto('a-tree');
     expect(stationPhoto.asset.panoramaId).toBe('station-pano');
-    expect(stationPhoto.body.displayText).toMatch(/at the hiding station/);
+    expect(stationPhoto.body.displayText).toMatch(/at the central station/);
     expect(otherStationPhoto.asset.heading).not.toBe(stationPhoto.asset.heading);
     expect(spotPhoto.asset.panoramaId).toBe('pano');
-    expect(spotPhoto.body.displayText).toMatch(/committed hiding spot/);
+    expect(spotPhoto.body.displayText).toMatch(/at the hiding location/);
+  });
+
+  it('returns a valid cannot-answer result for photo subjects Street View cannot supply', async () => {
+    const value = session();
+    value.commitment = await commitmentFor(value);
+    const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: await seal(value),
+        constraint: {
+          id: 'photo-interior', name: 'Restaurant interior', kind: 'photo-reference', enabled: true,
+          answer: 'yes', origin: value.spot, category: 'restaurant-interior',
+        },
+      }),
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.displayText).toMatch(/^I cannot answer:/);
+    expect(body.photoUrl).toBeUndefined();
+    expect(body.cardsDrawn).toBe(1);
+    expect(body.cardsKept).toBe(1);
+  });
+
+  it('starts end game for an in-zone pin and charges exactly one card for a miss', async () => {
+    const value = session();
+    value.commitment = await commitmentFor(value);
+    const ask = async (token: string, origin: { lat: number; lng: number }) => {
+      const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          constraint: { id: crypto.randomUUID(), name: 'Confirm end game', kind: 'endgame-confirmation', enabled: true, answer: 'no', origin },
+        }),
+      }));
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const miss = await ask(await seal(value), { lat: 37.72, lng: -122.50 });
+    expect(miss.answer).toBe('no');
+    expect(miss.phase).toBe('seeking');
+    expect(miss.cardsDrawn).toBe(1);
+    expect(miss.cardsKept).toBe(0);
+    expect(miss.totalCardsDrawn).toBe(1);
+
+    const correct = await ask(miss.token, value.station.position);
+    expect(correct.answer).toBe('yes');
+    expect(correct.phase).toBe('end-game');
+    expect(correct.cardsDrawn).toBe(0);
+    expect(correct.totalCardsDrawn).toBe(1);
   });
 
   it('counts a rulebook null answer without adding a geographic constraint', async () => {

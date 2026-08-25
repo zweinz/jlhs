@@ -129,7 +129,7 @@ function tentacleArea(constraint: Constraint, regions: Record<string, Area>) {
 }
 
 export function constraintArea(constraint: Constraint, regions: Record<string, Area> = {}): Area {
-  if (constraint.kind === 'photo-reference' || constraint.answer === 'null') return frame();
+  if (constraint.kind === 'photo-reference' || constraint.kind === 'endgame-confirmation' || constraint.answer === 'null') return frame();
   if (constraint.kind === 'thermometer') {
     return clipRectangleToBisector(
       constraint.origin,
@@ -219,7 +219,8 @@ export function combineConstraints(
   stationArea?: Area,
 ): Area {
   let result = stationArea ? clipToFrame(stationArea) : frame();
-  for (const constraint of constraints.filter((candidate) => candidate.enabled && candidate.kind !== 'photo-reference')) {
+  for (const constraint of constraints.filter((candidate) => candidate.enabled &&
+    candidate.kind !== 'photo-reference' && candidate.kind !== 'endgame-confirmation')) {
     const next = turf.intersect(turf.featureCollection([result, constraintArea(constraint, regions)]));
     if (!next) return empty();
     result = next as Area;

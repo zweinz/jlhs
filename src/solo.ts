@@ -5,13 +5,24 @@ import type { Constraint, Position, SharedState } from './types';
 export type SoloPhase = 'seeking' | 'end-game' | 'found' | 'gave-up';
 
 export type SoloPhotoKind =
-  | 'any-building-visible-from-station'
-  | 'widest-street'
   | 'a-tree'
-  | 'tallest-structure-in-your-sightline'
   | 'the-sky'
+  | 'you'
+  | 'widest-street'
+  | 'tallest-structure-in-your-sightline'
+  | 'any-building-visible-from-station'
   | 'tallest-building-visible-from-station'
-  | 'two-buildings';
+  | 'trace-nearest-street-path'
+  | 'two-buildings'
+  | 'restaurant-interior'
+  | 'park'
+  | 'grocery-store-aisle'
+  | 'place-of-worship'
+  | 'train-platform'
+  | 'half-mile-of-streets-traced'
+  | 'tallest-mountain-visible-from-station'
+  | 'biggest-body-of-water-in-your-zone'
+  | 'five-buildings';
 
 export type LegacySoloPhotoKind =
   | 'cardinal-view'
@@ -24,13 +35,24 @@ export type LegacySoloPhotoKind =
 export type AnySoloPhotoKind = SoloPhotoKind | LegacySoloPhotoKind;
 
 export const SOLO_PHOTO_SUBJECTS: Array<{ id: SoloPhotoKind; label: string; help: string }> = [
+  { id: 'a-tree', label: 'A tree', help: 'Approximate: a deterministic streetscape view at the hiding location; the image may not contain a tree.' },
+  { id: 'the-sky', label: 'The sky', help: 'Supported: a deterministic view aimed straight up at the hiding location.' },
+  { id: 'you', label: 'You', help: 'Unavailable: Street View cannot take a new photograph of the AI hider, so the answer is “I cannot answer.”' },
+  { id: 'widest-street', label: 'Widest street', help: 'Approximate: a wide deterministic streetscape at the hiding location; Street View cannot prove it is the zone’s widest.' },
+  { id: 'tallest-structure-in-your-sightline', label: 'Tallest structure in your sightline', help: 'Approximate: an upward-framed deterministic view at the hiding location.' },
   { id: 'any-building-visible-from-station', label: 'Any building visible from station', help: 'Rulebook-card approximation from the station panorama, framed upward to include a nearby building.' },
-  { id: 'widest-street', label: 'Widest street', help: 'Rulebook-card approximation using a wide view from the committed hiding panorama.' },
-  { id: 'a-tree', label: 'A tree', help: 'Rulebook-card approximation using a narrower streetscape view from the committed hiding panorama.' },
-  { id: 'tallest-structure-in-your-sightline', label: 'Tallest structure in your sightline', help: 'Rulebook-card approximation pitched upward from the committed hiding panorama.' },
-  { id: 'the-sky', label: 'The sky', help: 'Rulebook-card approximation aimed straight up from the committed hiding panorama.' },
   { id: 'tallest-building-visible-from-station', label: 'Tallest building visible from station', help: 'Medium-game rulebook-card approximation from the station panorama, using a different view from the any-building card.' },
+  { id: 'trace-nearest-street-path', label: 'Trace nearest street/path', help: 'Unavailable: an unmodified Street View image cannot provide the rulebook’s map trace, so the answer is “I cannot answer.”' },
   { id: 'two-buildings', label: 'Two buildings', help: 'Medium-game rulebook-card approximation using a wide streetscape from the committed hiding panorama.' },
+  { id: 'restaurant-interior', label: 'Restaurant interior', help: 'Unavailable: Solo uses outdoor Street View only, so the answer is “I cannot answer.”' },
+  { id: 'park', label: 'Park', help: 'Unavailable unless a rule-compliant park photo can be guaranteed; current outdoor metadata cannot verify the subject.' },
+  { id: 'grocery-store-aisle', label: 'Grocery store aisle', help: 'Unavailable: Solo uses outdoor Street View only, so the answer is “I cannot answer.”' },
+  { id: 'place-of-worship', label: 'Place of worship', help: 'Unavailable unless the subject can be verified; Street View metadata alone cannot guarantee one is pictured.' },
+  { id: 'train-platform', label: 'Train platform', help: 'Unavailable: a station entrance panorama is not treated as a train-platform photo.' },
+  { id: 'half-mile-of-streets-traced', label: '½ mile of streets traced', help: 'Unavailable: an unmodified Street View image cannot provide the rulebook’s map trace.' },
+  { id: 'tallest-mountain-visible-from-station', label: 'Tallest mountain visible from station', help: 'Unavailable: Street View metadata cannot determine which mountain is visible or tallest.' },
+  { id: 'biggest-body-of-water-in-your-zone', label: 'Biggest body of water in your zone', help: 'Unavailable: Street View metadata cannot guarantee a qualifying body of water is visible.' },
+  { id: 'five-buildings', label: 'Five buildings', help: 'Approximate: a wide deterministic streetscape at the hiding location; the image may contain fewer than five buildings.' },
 ];
 
 export const LEGACY_SOLO_PHOTO_KINDS: LegacySoloPhotoKind[] = [
@@ -85,6 +107,8 @@ export type SoloReveal = {
   station: { id: string; name: string; position: Position };
   spot: Position;
   panorama: { id: string; date?: string; imageUrl: string };
+  stationPanorama?: { id: string; date?: string };
+  commitmentVersion?: 1 | 2;
   route: {
     durationSeconds: number;
     distanceMeters: number;
@@ -174,6 +198,7 @@ export type SoloPhotoPlan = {
   heading: number;
   pitch: number;
   fov: number;
+  unavailableReason?: string;
 };
 
 const normalizedHeading = (heading: number) => ((heading % 360) + 360) % 360;
@@ -193,28 +218,45 @@ export function soloPhotoPlan(
   const atStation = (displayText: string, heading: number, pitch: number, fov: number): SoloPhotoPlan => ({
     source: 'station', displayText, heading: normalizedHeading(heading), pitch, fov,
   });
+  const unavailable = (reason: string): SoloPhotoPlan => ({
+    source: 'spot', displayText: `I cannot answer: ${reason}`, heading: normalizedHeading(seededHeading), pitch: 0, fov: 90,
+    unavailableReason: reason,
+  });
 
   if (kind === 'any-building-visible-from-station') {
-    return atStation('Any building visible from station · Street View approximation taken at the hiding station', seededHeading, 8, 90);
+    return atStation('Any building visible from station · Street View approximation at the central station', seededHeading, 8, 90);
   }
   if (kind === 'tallest-building-visible-from-station') {
-    return atStation('Tallest building visible from station · Street View approximation taken at the hiding station', seededHeading + 180, 14, 75);
+    return atStation('Tallest building visible from station · Street View approximation at the central station', seededHeading + 180, 14, 75);
   }
   if (kind === 'widest-street') {
-    return atSpot('Widest street · Street View approximation from the AI’s committed hiding spot', seededHeading + 90, 0, 120);
+    return atSpot('Widest street · Street View approximation at the hiding location', seededHeading + 90, 0, 120);
   }
   if (kind === 'a-tree') {
-    return atSpot('A tree · Street View approximation from the AI’s committed hiding spot', seededHeading, 0, 75);
+    return atSpot('A tree · Street View approximation at the hiding location', seededHeading, 0, 75);
   }
   if (kind === 'tallest-structure-in-your-sightline') {
-    return atSpot('Tallest structure in your sightline · Street View approximation from the AI’s committed hiding spot', seededHeading + 180, 14, 75);
+    return atSpot('Tallest structure in your sightline · Street View approximation at the hiding location', seededHeading + 180, 14, 75);
   }
   if (kind === 'the-sky') {
-    return atSpot('The sky · Street View approximation from the AI’s committed hiding spot', seededHeading, 90, 90);
+    return atSpot('The sky · Street View at the hiding location', seededHeading, 90, 90);
   }
   if (kind === 'two-buildings') {
-    return atSpot('Two buildings · Street View approximation from the AI’s committed hiding spot', seededHeading + 270, 0, 120);
+    return atSpot('Two buildings · Street View approximation at the hiding location', seededHeading + 270, 0, 120);
   }
+  if (kind === 'five-buildings') {
+    return atSpot('Five buildings · Street View approximation at the hiding location', seededHeading + 225, 0, 120);
+  }
+  if (kind === 'you') return unavailable('Street View cannot take a new photograph of the AI hider');
+  if (kind === 'trace-nearest-street-path') return unavailable('an unmodified Street View image cannot provide the required map trace');
+  if (kind === 'restaurant-interior') return unavailable('Solo uses outdoor Street View and cannot show a restaurant interior');
+  if (kind === 'park') return unavailable('the available metadata cannot verify a rule-compliant park photo');
+  if (kind === 'grocery-store-aisle') return unavailable('Solo uses outdoor Street View and cannot show a grocery-store aisle');
+  if (kind === 'place-of-worship') return unavailable('the available metadata cannot verify a place of worship in the image');
+  if (kind === 'train-platform') return unavailable('the station entrance panorama is not a verified train-platform photo');
+  if (kind === 'half-mile-of-streets-traced') return unavailable('an unmodified Street View image cannot provide the required half-mile map trace');
+  if (kind === 'tallest-mountain-visible-from-station') return unavailable('Street View metadata cannot identify the tallest visible mountain');
+  if (kind === 'biggest-body-of-water-in-your-zone') return unavailable('Street View metadata cannot verify the zone’s biggest body of water');
 
   // Preserve deterministic answers for already-created drafts from the earlier house-rule inventory.
   if (kind === 'cardinal-view') return atSpot('Cardinal view from the AI’s committed hiding spot', cardinal, 0, 90);
@@ -267,6 +309,7 @@ export function soloStateForNewGame(base: SharedState): SharedState {
     routeStatuses: {},
     hiderPosition: undefined,
     hiderMapUrl: undefined,
+    endGameActive: false,
   };
 }
 
@@ -289,6 +332,10 @@ export async function verifyRevealCommitment(reveal: SoloReveal) {
     panorama: { id: reveal.panorama.id, ...(reveal.panorama.date ? { date: reveal.panorama.date } : {}) },
     route: reveal.route,
     salt: reveal.salt,
+    ...(reveal.commitmentVersion === 2 ? {
+      commitmentVersion: 2,
+      stationPanorama: reveal.stationPanorama,
+    } : {}),
   };
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload))));
   let binary = '';

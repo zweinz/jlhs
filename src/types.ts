@@ -9,6 +9,7 @@ export type QuestionKind =
   | 'coastline'
   | 'tentacle'
   | 'photo-reference'
+  | 'endgame-confirmation'
   | 'direction'
   | 'closer'
   | 'farther'
@@ -23,6 +24,7 @@ export interface Constraint {
   kind: QuestionKind;
   enabled: boolean;
   answer: Answer;
+  answerSet?: boolean;
   origin: Position;
   originSet?: boolean;
   originMapUrl?: string;
@@ -50,4 +52,5 @@ export interface SharedState {
   transitScope: TransitScope;
   stationStatuses: Record<string, Eligibility>;
   routeStatuses: Record<string, Eligibility>;
+  endGameActive?: boolean;
 }

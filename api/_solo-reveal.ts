@@ -10,6 +10,8 @@ export async function revealPayload(session: SecretSoloSession, reason: 'found' 
     station: session.station,
     spot: session.spot,
     panorama: { ...session.panorama, imageUrl: `/api/solo/photo?token=${encodeURIComponent(await seal(asset))}` },
+    stationPanorama: session.stationPanorama,
+    commitmentVersion: session.commitmentVersion,
     route: session.route,
     sessionId: session.sessionId,
     salt: session.salt,

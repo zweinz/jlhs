@@ -13,7 +13,7 @@ export type QuestionDefinition = {
 
 const originKinds = new Set<QuestionKind>([
   'radar', 'radius', 'thermometer', 'measuring', 'coastline', 'tentacle',
-  'direction', 'closer', 'farther', 'intersection', 'exclusion',
+  'direction', 'closer', 'farther', 'intersection', 'exclusion', 'endgame-confirmation',
 ]);
 const targetKinds = new Set<QuestionKind>(['thermometer', 'closer', 'farther']);
 const distanceKinds = new Set<QuestionKind>([
@@ -33,7 +33,7 @@ export function questionRequiresTarget(constraint: Pick<Constraint, 'kind'>) {
 export function missingQuestionFields(constraint: Constraint) {
   const missing: string[] = [];
   if (questionRequiresOrigin(constraint) && constraint.originSet === false) {
-    missing.push(constraint.kind === 'thermometer' ? 'starting pin' : 'seeker pin');
+    missing.push(constraint.kind === 'thermometer' ? 'starting pin' : constraint.kind === 'endgame-confirmation' ? 'end-zone pin' : 'seeker pin');
   }
   if (questionRequiresTarget(constraint) && constraint.targetSet === false) {
     missing.push(constraint.kind === 'thermometer' ? 'ending pin' : 'comparison pin');
@@ -46,6 +46,7 @@ export function missingQuestionFields(constraint: Constraint) {
   if (constraint.kind === 'matching-region' && constraint.category === 'transit-route' && !constraint.regionId) {
     missing.push('transit service');
   }
+  if (constraint.kind === 'endgame-confirmation' && constraint.answerSet === false) missing.push('hider result');
   return missing;
 }
 
@@ -179,6 +180,20 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     timeLimit: '10 minutes for the SF small game',
     sourceUrl: 'https://www.lifack.ch/docs/seeking/photo_questions/',
   },
+  'endgame-confirmation': {
+    label: 'Confirm end game has been entered',
+    help: 'Submit a pin you believe is inside the hider’s ¼-mile zone.',
+    notes: [
+      'Custom SF question: this is not a standard question card from the rulebook.',
+      'The question is free. If the supplied pin is outside the hiding zone, the hider draws one penalty card.',
+      'A correct confirmation starts the end game immediately. Once started, the end game remains active.',
+      'The supplied pin is used only for the confirmation and does not shade or otherwise constrain the feasible map.',
+    ],
+    drawInstruction: 'Free if correct; draw 1 as a penalty if incorrect',
+    baseDrawCount: 0,
+    baseKeepCount: 0,
+    sourceUrl: 'https://www.lifack.ch/docs/quick_start_guide/the_end_game/',
+  },
   radius: { label: 'Manual radius', help: 'Keep an area inside or outside a measured radius.', notes: [manualNote] },
   direction: { label: 'Manual direction', help: 'Keep a half-plane north, south, east, or west of a pin.', notes: [manualNote] },
   closer: { label: 'Manual closer than', help: 'Keep points within the answered comparison radius.', notes: [manualNote] },
@@ -194,6 +209,7 @@ export const PRIMARY_QUESTION_KINDS: QuestionKind[] = [
   'matching-region',
   'tentacle',
   'photo-reference',
+  'endgame-confirmation',
 ];
 
 export const RULEBOOK_DISTANCE_CHOICES = {

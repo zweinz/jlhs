@@ -105,6 +105,7 @@ const initial: SharedState = {
   transitScope: 'all',
   stationStatuses: {},
   routeStatuses: {},
+  endGameActive: false,
 };
 const partitionColor = (index: number, total: number, offset = 0) =>
   `hsl(${Math.round((index * 360) / Math.max(1, total) + offset) % 360}, 62%, 39%)`;
@@ -155,7 +156,7 @@ const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
 const soloPhotoChoices: RulebookSubject[] = SOLO_PHOTO_SUBJECTS.map((subject) => ({
   ...subject,
   status: 'in-play',
-  support: 'reference',
+  support: subject.help.startsWith('Unavailable') ? 'not-mapped' : subject.help.startsWith('Supported') ? 'exact' : 'approximate',
   notes: [subject.help, 'Solo house rule: Street View approximates the rulebook framing without using a vision model.'],
 }));
 
@@ -388,6 +389,7 @@ function subjectChoices(kind: QuestionKind) {
 function defaultAnswer(kind: QuestionKind): Constraint['answer'] {
   if (kind === 'thermometer') return 'colder';
   if (kind === 'measuring' || kind === 'coastline') return 'closer';
+  if (kind === 'endgame-confirmation') return 'no';
   return 'yes';
 }
 
@@ -957,16 +959,18 @@ export default function App() {
   }, [currentLocation, currentLocationVisible, droppedPin, eligibleIds, excluded, feasible, longPress, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.reveal, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
-    setState((current) => ({
-      ...current,
-      constraints: current.constraints.map((constraint) => {
+    setState((current) => {
+      let startsEndGame = false;
+      const constraints = current.constraints.map((constraint) => {
         if (constraint.id !== id) return constraint;
         const wasReady = questionIsReady(constraint);
         const next = { ...constraint, ...update };
         const ready = questionIsReady(next);
+        if (next.kind === 'endgame-confirmation' && next.answer === 'yes' && ready) startsEndGame = true;
         return { ...next, enabled: ready ? (!wasReady ? true : next.enabled) : false };
-      }),
-    }));
+      });
+      return { ...current, constraints, endGameActive: current.endGameActive || startsEndGame };
+    });
 
   const add = () => {
     const kind = (document.querySelector('#kind') as HTMLSelectElement).value as QuestionKind;
@@ -980,6 +984,7 @@ export default function App() {
       kind,
       enabled: false,
       answer: defaultAnswer(kind),
+      answerSet: !!solo || kind !== 'endgame-confirmation',
       origin,
       originSet: !questionRequiresOrigin({ kind, category }),
       target: { lat: 37.7857, lng: -122.4011 },
@@ -1162,7 +1167,7 @@ export default function App() {
       const body = await response.json() as {
         token?: string; answer?: Constraint['answer']; displayText?: string; resolvedRegionId?: string;
         photoUrl?: string; repetition?: number; cardsDrawn?: number; cardsKept?: number;
-        totalCardsDrawn?: number; totalCardsKept?: number; error?: string;
+        totalCardsDrawn?: number; totalCardsKept?: number; phase?: SoloClientSession['phase']; error?: string;
       };
       if (!response.ok || !body.token || !body.answer || !body.displayText) throw new Error(body.error ?? 'The AI could not answer.');
       patchConstraint(constraint.id, { answer: body.answer, ...(body.resolvedRegionId ? { regionId: body.resolvedRegionId } : {}) });
@@ -1179,9 +1184,15 @@ export default function App() {
         token: body.token!,
         cardsDrawn: body.totalCardsDrawn ?? current.cardsDrawn,
         cardsKept: body.totalCardsKept ?? current.cardsKept,
+        phase: body.phase ?? current.phase,
         questions: { ...current.questions, [constraint.id]: record },
       } : current);
-      setMessage(`AI answered · drew ${record.cardsDrawn} card${record.cardsDrawn === 1 ? '' : 's'}.`);
+      if (body.phase === 'end-game') setState((current) => ({ ...current, endGameActive: true }));
+      setMessage(body.phase === 'end-game'
+        ? 'Confirmed — the end game has begun.'
+        : record.cardsDrawn === 0
+          ? 'AI answered · no cards drawn.'
+          : `AI answered · drew ${record.cardsDrawn} card${record.cardsDrawn === 1 ? '' : 's'}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The AI could not answer.');
     } finally {
@@ -1197,6 +1208,9 @@ export default function App() {
     let reveal = body.reveal;
     if (reveal) reveal = { ...reveal, commitmentValid: await verifyRevealCommitment(reveal) };
     setSolo((current) => current ? { ...current, token: body.token!, phase: body.phase!, reveal: reveal ?? current.reveal } : current);
+    if (body.phase === 'end-game' || body.phase === 'found') {
+      setState((current) => ({ ...current, endGameActive: true }));
+    }
     if (body.message) setMessage(body.message);
   };
 
@@ -1303,10 +1317,13 @@ export default function App() {
       {solo ? <nav className="solo-status" aria-label="Solo game status">
         <span><b>{solo.phase === 'end-game' ? 'End game' : solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Revealed' : 'Seeking'}</b><small>{solo.cardsDrawn} drawn · {solo.cardsKept} kept</small></span>
         <button type="button" onClick={checkSoloCurrentLocation} disabled={soloBusy || !!solo.reveal}>{soloBusy ? 'Checking…' : 'Check my location'}</button>
-      </nav> : <nav className="mode-switch" aria-label="Player mode">
-        <button className={state.mode === 'seeker' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'seeker' }))}>Seeker</button>
-        <button className={state.mode === 'hider' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'hider' }))}>Hider answer helper</button>
-      </nav>}
+      </nav> : <>
+        <nav className="mode-switch" aria-label="Player mode">
+          <button className={state.mode === 'seeker' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'seeker' }))}>Seeker</button>
+          <button className={state.mode === 'hider' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'hider' }))}>Hider answer helper</button>
+        </nav>
+        {state.endGameActive && <div className="human-endgame-status" role="status"><b>End game active</b><button type="button" className="secondary" onClick={() => setState((current) => ({ ...current, endGameActive: false }))}>Reset</button></div>}
+      </>}
       <div className="layout">
         <aside aria-label="Question constraint controls">
           {solo && <section className="panel solo-panel">
@@ -1484,10 +1501,10 @@ export default function App() {
                   <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} disabled={!questionReady} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
                   <p className="question-help">{definition.help}</p>
                   {!questionReady && <p className="draft-status">Draft disabled · add {missingFields.join(' and ')} to enable it.</p>}
-                  {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition && questionReady ? '' : 'waiting'}`}><span>Hider answer</span><strong>{!questionReady ? 'Complete the draft first' : state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
+                  {state.mode === 'hider' && <div className={`answer-result ${(constraint.kind === 'endgame-confirmation' || (state.hiderPosition && questionReady)) ? '' : 'waiting'}`}><span>Hider answer</span><strong>{!questionReady ? 'Complete the draft first' : constraint.kind === 'endgame-confirmation' ? 'Record whether this pin is inside your hiding zone' : state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
                   {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={`${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
-                    {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
+                    {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answerSet === false ? '' : constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'], answerSet: true })}>{constraint.kind === 'endgame-confirmation' && <option value="">Choose result</option>}{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{constraint.kind === 'endgame-confirmation' ? answer === 'yes' ? 'Correct · inside zone' : 'Incorrect · outside zone' : answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
                     {prescribedDistances ? <>
                       <label className="wide">Card distance<select aria-label={`${constraint.name} card distance`} value={distanceChoice} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: event.target.value === 'custom' ? undefined : Number(event.target.value) })}>
                         {prescribedDistances.map((distance) => <option key={distance} value={distance}>{formatQuestionDistance(distance)} · asked {priorUsesFor(constraint, { ...constraint, distanceMiles: distance })}x</option>)}
@@ -1500,13 +1517,15 @@ export default function App() {
                     {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s moving transit service<select value={constraint.regionId ?? ''} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{scopedRoutes.map((route) => <option key={route.id} value={route.id}>{transitRouteLabel(route)}</option>)}</select></label>}
                     {!solo && constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
-                  {!askedRecord && definition.baseDrawCount !== undefined && definition.baseKeepCount !== undefined && <p className="question-cost">Selected card asked {selectedPriorUses}x before · next reward: perform “draw {definition.baseDrawCount}, keep {definition.baseKeepCount}” {selectedPriorUses + 1}× ({cardsForQuestion(constraint, selectedPriorUses)} drawn, {keptCardsForQuestion(constraint, selectedPriorUses)} kept total).</p>}
+                  {!askedRecord && constraint.kind === 'endgame-confirmation' && <p className="question-cost">Free to ask · a correct pin starts the end game; an incorrect pin makes the hider draw 1 penalty card.</p>}
+                  {!askedRecord && constraint.kind !== 'endgame-confirmation' && definition.baseDrawCount !== undefined && definition.baseKeepCount !== undefined && <p className="question-cost">Selected card asked {selectedPriorUses}x before · next reward: perform “draw {definition.baseDrawCount}, keep {definition.baseKeepCount}” {selectedPriorUses + 1}× ({cardsForQuestion(constraint, selectedPriorUses)} drawn, {keptCardsForQuestion(constraint, selectedPriorUses)} kept total).</p>}
+                  {constraint.kind === 'endgame-confirmation' && !solo && questionReady && <p className="derived">Recorded result: <b>{constraint.answer === 'yes' ? 'Correct — end game active; no cards drawn' : 'Incorrect — hider draws 1 penalty card'}</b></p>}
                   {constraint.kind === 'matching-region' && category === 'transit-route' && <p className="derived">No distance applies. “Yes” keeps only stations where this service actually stops; “No” removes those stations.</p>}
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{constraint.originSet === false ? 'set the seeker pin' : matchingSource ?? 'set the seeker pin'}</b></p>}
-                  {usesOrigin && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
+                  {usesOrigin && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : constraint.kind === 'endgame-confirmation' ? 'Pin believed to be inside the hiding zone' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
                   {usesTarget && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
                   {solo && !askedRecord && <button type="button" className="full keep" disabled={!questionReady || soloBusy || !!solo.reveal} onClick={() => void askSolo(constraint)}>{soloBusy ? 'AI is answering…' : 'Ask AI'}</button>}
-                  <details className="rule-notes"><summary>Rulebook notes</summary>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate map support' : selectedSubject.support === 'reference' ? 'Reference card' : 'Mapped exactly'}</b></p>}<ul>{orderedRuleNotes(constraint.kind, questionNotes, selectedSubject?.notes).map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</details>
+                  <details className="rule-notes"><summary>Rulebook notes</summary>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate support' : selectedSubject.support === 'reference' ? 'Reference card' : selectedSubject.support === 'not-mapped' ? 'Returns “I cannot answer”' : 'Supported'}</b></p>}<ul>{orderedRuleNotes(constraint.kind, questionNotes, selectedSubject?.notes).map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</details>
                   {!askedRecord && <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>}
                 </article>
               );
@@ -1519,10 +1538,10 @@ export default function App() {
             <section className="storage-summary" aria-labelledby="storage-summary-title">
               <h3 id="storage-summary-title">Storage, refresh, and sharing</h3>
               <dl>
-                <div><dt>Seeker ↔ Hider Helper</dt><dd>These are two views of one human workspace, not separate games. Switching modes carries the same questions, recorded answers, station/route cuts, layers, and map viewport. The Hider Helper’s calculated answer is display-only and does not overwrite the recorded answer. Its private position remains available while this tab is open, but is hidden in Seeker mode and excluded from sharing.</dd></div>
+                <div><dt>Seeker ↔ Hider Helper</dt><dd>These are two views of one human workspace, not separate games. Switching modes carries the same questions, recorded answers, end-game status, station/route cuts, layers, and map viewport. The Hider Helper’s calculated answer is display-only and does not overwrite the recorded answer. Its private position remains available while this tab is open, but is hidden in Seeker mode and excluded from sharing.</dd></div>
                 <div><dt>Draft questions</dt><dd>A new question remains disabled and does not change the map until every required pin and option has been set. The card lists what is missing and enables itself when the last required field is completed; after that, Enabled can be switched off or on normally. No map-center or private hider location is used as an active draft answer.</dd></div>
                 <div><dt>Normal workspace</dt><dd>Edits live only in this browser tab. A refresh restores the configuration currently in the URL; without a <code>config</code> value, it starts fresh. Merely switching between Seeker and Hider Helper does not write anything to the URL or server.</dd></div>
-                <div><dt>Share URL</dt><dd>Choosing “Share map” writes a one-time snapshot of the human workspace into the URL; it is not live synchronization. It includes the selected human mode, question pins and recorded answers, station/route cuts, layers, and viewport. The recipient can switch between Seeker and Hider Helper, but later edits in either browser do not carry over. The snapshot excludes the private hider position, current location, path trace, Solo session, route, central station, and hiding spot.</dd></div>
+                <div><dt>Share URL</dt><dd>Choosing “Share map” writes a one-time snapshot of the human workspace into the URL; it is not live synchronization. It includes the selected human mode, question pins and recorded answers, end-game status, station/route cuts, layers, and viewport. The recipient can switch between Seeker and Hider Helper, but later edits in either browser do not carry over. The snapshot excludes the private hider position, current location, path trace, Solo session, route, central station, and hiding spot.</dd></div>
                 <div><dt>Solo game</dt><dd>The encrypted 48-hour session token, card totals, question history, Solo board, and pre-Solo workspace are saved in this browser’s local storage. Refreshing this browser resumes it; another person or browser does not share the game.</dd></div>
                 <div><dt>Server</dt><dd>Solo requests are processed statelessly: the app has no game-session database. The server reads and replaces the encrypted token and calls Google for routing and Street View without putting the Solo secret in a share URL.</dd></div>
                 <div><dt>Temporary location data</dt><dd>Current-location display, path traces, and a manually dropped map pin remain in page memory and disappear on refresh. A GPS or pasted finish pin is sent to the server only when checking the Solo hiding spot.</dd></div>

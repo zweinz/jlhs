@@ -1,7 +1,7 @@
 import { SF_BOUNDS } from '../../src/data';
 import { solveHiderQuestion } from '../../src/hider';
 import { QUESTION_DEFINITIONS } from '../../src/questions';
-import { canonicalQuestionKey, cardsForQuestion, keptCardsForQuestion, keptCardsFromQuestionUses, LEGACY_SOLO_PHOTO_KINDS, publicSoloDisplayText, soloPhotoPlan, SOLO_PHOTO_SUBJECTS, type AnySoloPhotoKind } from '../../src/solo';
+import { canonicalQuestionKey, cardsForQuestion, distanceMeters, keptCardsForQuestion, keptCardsFromQuestionUses, LEGACY_SOLO_PHOTO_KINDS, publicSoloDisplayText, soloPhotoPlan, SOLO_PHOTO_SUBJECTS, type AnySoloPhotoKind } from '../../src/solo';
 import type { Constraint, Position, QuestionKind } from '../../src/types';
 import { panoramaAt } from '../_solo-google';
 import { jsonError, readJson, seal, unseal, type PhotoAsset, type SecretSoloSession } from '../_solo-session';
@@ -9,7 +9,7 @@ import { jsonError, readJson, seal, unseal, type PhotoAsset, type SecretSoloSess
 export const config = { runtime: 'edge' };
 
 type QuestionBody = { token?: string; constraint?: Constraint };
-const kinds = new Set<QuestionKind>(['radar', 'thermometer', 'measuring', 'matching-region', 'tentacle', 'photo-reference']);
+const kinds = new Set<QuestionKind>(['radar', 'thermometer', 'measuring', 'matching-region', 'tentacle', 'photo-reference', 'endgame-confirmation']);
 const photoKinds = new Set<string>([
   ...SOLO_PHOTO_SUBJECTS.map((subject) => subject.id),
   ...LEGACY_SOLO_PHOTO_KINDS,
@@ -40,10 +40,10 @@ export default async function handler(request: Request) {
     const constraint = body.constraint!;
     const key = canonicalQuestionKey(constraint);
     const priorUses = session.questionUses[key] ?? 0;
-    const cardsDrawn = cardsForQuestion(constraint, priorUses);
-    const cardsKept = keptCardsForQuestion(constraint, priorUses);
+    let cardsDrawn = cardsForQuestion(constraint, priorUses);
+    let cardsKept = keptCardsForQuestion(constraint, priorUses);
     let answer = constraint.answer;
-    let displayText: string;
+    let displayText = '';
     let resolvedRegionId: string | undefined;
     let photoUrl: string | undefined;
 
@@ -56,14 +56,17 @@ export default async function handler(request: Request) {
         session.wideHeading,
       );
       let panorama = plan.source === 'station' ? session.stationPanorama : session.panorama;
-      if (plan.source === 'station' && !panorama) {
+      if (plan.unavailableReason) {
+        displayText = plan.displayText;
+        photoUrl = undefined;
+      } else if (plan.source === 'station' && !panorama) {
         const metadata = await panoramaAt(session.station.position);
         if (metadata) {
           panorama = { id: metadata.id, date: metadata.date };
           session.stationPanorama = panorama;
         }
       }
-      if (panorama) {
+      if (!plan.unavailableReason && panorama) {
         const asset: PhotoAsset = {
           kind: 'solo-photo', version: 1, expiresAt: session.expiresAt,
           panoramaId: panorama.id,
@@ -74,10 +77,17 @@ export default async function handler(request: Request) {
         const assetToken = await seal(asset);
         photoUrl = `/api/solo/photo?token=${encodeURIComponent(assetToken)}`;
         displayText = plan.displayText;
-      } else {
-        displayText = 'I cannot answer: outdoor Street View is unavailable at the hiding station';
+      } else if (!plan.unavailableReason) {
+        displayText = `I cannot answer: outdoor Street View is unavailable at the ${plan.source === 'station' ? 'central station' : 'hiding location'}`;
       }
       answer = 'yes';
+    } else if (constraint.kind === 'endgame-confirmation') {
+      const correct = distanceMeters(constraint.origin, session.station.position) <= 0.25 * 1609.344;
+      answer = correct ? 'yes' : 'no';
+      displayText = correct ? 'Yes — end game has begun' : 'No — that pin is outside the hiding zone';
+      cardsDrawn = correct ? 0 : 1;
+      cardsKept = 0;
+      if (correct) session.phase = 'end-game';
     } else {
       const answerPosition = constraint.kind === 'matching-region' && constraint.category === 'transit-route'
         ? session.station.position

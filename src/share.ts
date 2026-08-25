@@ -9,6 +9,7 @@ const kinds = new Set([
   'coastline',
   'tentacle',
   'photo-reference',
+  'endgame-confirmation',
   'direction',
   'closer',
   'farther',
@@ -86,6 +87,7 @@ export function validateState(value: unknown): SharedState {
       typeof candidate.enabled !== 'boolean' ||
       !kinds.has(candidate.kind) ||
       !answers.has(candidate.answer) ||
+      (candidate.answerSet !== undefined && typeof candidate.answerSet !== 'boolean') ||
       !validPosition(candidate.origin) ||
       (candidate.originSet !== undefined && typeof candidate.originSet !== 'boolean') ||
       (candidate.target !== undefined && !validPosition(candidate.target)) ||
@@ -99,7 +101,8 @@ export function validateState(value: unknown): SharedState {
       throw Error('Invalid constraint');
     }
   }
-  return { ...state, areaDisplayMode, transitScope };
+  if (state.endGameActive !== undefined && typeof state.endGameActive !== 'boolean') throw Error('Invalid end-game state');
+  return { ...state, areaDisplayMode, transitScope, endGameActive: state.endGameActive ?? false };
 }
 
 function migrate(value: unknown) {
@@ -115,6 +118,7 @@ function migrate(value: unknown) {
     transitScope: 'all',
     stationStatuses: {},
     routeStatuses: {},
+    endGameActive: false,
   };
 }
 
