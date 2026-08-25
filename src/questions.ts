@@ -196,6 +196,17 @@ export const PRIMARY_QUESTION_KINDS: QuestionKind[] = [
   'photo-reference',
 ];
 
+export const RULEBOOK_DISTANCE_CHOICES = {
+  radar: [0.25, 0.5, 1, 3, 5, 10, 25, 50, 100],
+  thermometer: [0.5, 3],
+} as const;
+
+export function formatQuestionDistance(distanceMiles: number) {
+  if (distanceMiles === 0.25) return '¼ mile';
+  if (distanceMiles === 0.5) return '½ mile';
+  return `${distanceMiles} mile${distanceMiles === 1 ? '' : 's'}`;
+}
+
 export const orderedRuleNotes = (
   kind: QuestionKind,
   questionNotes: string[],

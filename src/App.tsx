@@ -16,7 +16,7 @@ import { hiderAnswer } from './hider';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { createLongPressController } from './longPress';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
-import { missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, questionRequiresOrigin, questionRequiresTarget } from './questions';
+import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, questionRequiresOrigin, questionRequiresTarget, RULEBOOK_DISTANCE_CHOICES } from './questions';
 import {
   MATCHING_SUBJECTS,
   MEASURING_SUBJECTS,
@@ -39,10 +39,13 @@ import {
 } from './rulebookGeometry';
 import { decodeState, encodeState } from './share';
 import {
+  canonicalQuestionKey,
+  cardsForQuestion,
   defaultSfDateTime,
   keptCardsForQuestion,
   migrateSoloPhotoKind,
   publicSoloDisplayText,
+  questionUseCounts,
   sfLocalDateTimeToIso,
   SOLO_PHOTO_SUBJECTS,
   soloRevealMapFeatures,
@@ -476,6 +479,25 @@ export default function App() {
     (constraint) => constraint.id === selectedConstraintId && constraint.kind === 'radar' && questionIsReady(constraint),
   );
   const readyConstraints = state.constraints.filter(questionIsReady);
+  const countedQuestionIds = useMemo(
+    () => new Set(solo
+      ? Object.keys(solo.questions)
+      : state.constraints.filter(questionIsReady).map((constraint) => constraint.id)),
+    [solo?.questions, state.constraints],
+  );
+  const useCounts = useMemo(
+    () => questionUseCounts(state.constraints.filter((constraint) => countedQuestionIds.has(constraint.id))),
+    [countedQuestionIds, state.constraints],
+  );
+
+  const priorUsesFor = (
+    current: Constraint,
+    candidate: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'> = current,
+  ) => {
+    const candidateKey = canonicalQuestionKey(candidate);
+    const includesCurrent = countedQuestionIds.has(current.id) && canonicalQuestionKey(current) === candidateKey;
+    return Math.max(0, (useCounts[candidateKey] ?? 0) - (includesCurrent ? 1 : 0));
+  };
 
   useEffect(() => {
     if (!solo) {
@@ -1420,6 +1442,11 @@ export default function App() {
               const usesOrigin = questionRequiresOrigin(constraint);
               const usesTarget = questionRequiresTarget(constraint);
               const usesDistance = ['radar', 'thermometer', 'radius', 'tentacle', 'closer', 'farther', 'intersection', 'exclusion'].includes(constraint.kind);
+              const prescribedDistances = constraint.kind === 'radar' || constraint.kind === 'thermometer'
+                ? RULEBOOK_DISTANCE_CHOICES[constraint.kind]
+                : undefined;
+              const selectedDistance = prescribedDistances?.find((distance) => distance === constraint.distanceMiles);
+              const distanceChoice = selectedDistance === undefined ? 'custom' : String(selectedDistance);
               const usesCategory = ['matching-region', 'measuring', 'tentacle', 'photo-reference'].includes(constraint.kind);
               const category = constraint.category;
               const missingFields = missingQuestionFields(constraint);
@@ -1430,6 +1457,7 @@ export default function App() {
                 ? ['Solo house rule: Google Street View approximates a live hider photo.', 'Station cards use a panorama at the hiding station. New games commit other supported cards to a separate hiding panorama at least 0.1 mile from the station.', 'The server never exposes a coordinate-bearing Google request URL.', 'If imagery becomes unavailable, “I cannot answer” remains a valid answer.']
                 : definition.notes;
               const selectedSubject = categoryChoices.find((subject) => subject.id === category);
+              const selectedPriorUses = priorUsesFor(constraint);
               const tentacleChoices = constraint.kind === 'tentacle' && category !== 'transit-route'
                 ? pois.filter((poi) => poi.category === category && turf.distance([constraint.origin.lng, constraint.origin.lat], [poi.lng, poi.lat], { units: 'miles' }) <= (constraint.distanceMiles ?? 1))
                 : [];
@@ -1460,12 +1488,19 @@ export default function App() {
                   {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={`${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
                     {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
-                    {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
+                    {prescribedDistances ? <>
+                      <label className="wide">Card distance<select aria-label={`${constraint.name} card distance`} value={distanceChoice} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: event.target.value === 'custom' ? undefined : Number(event.target.value) })}>
+                        {prescribedDistances.map((distance) => <option key={distance} value={distance}>{formatQuestionDistance(distance)} · asked {priorUsesFor(constraint, { ...constraint, distanceMiles: distance })}x</option>)}
+                        <option value="custom">Custom distance · asked {distanceChoice === 'custom' ? selectedPriorUses : 0}x</option>
+                      </select></label>
+                      {distanceChoice === 'custom' && <label className="wide">Custom miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles ?? ''} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: event.target.value === '' ? undefined : Number(event.target.value) })} /></label>}
+                    </> : usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
                     {constraint.kind === 'direction' && <label>Direction<select value={constraint.direction} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'south', 'east', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
-                    {usesCategory && <label className="wide">Subject<select value={category} disabled={!!askedRecord} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? (constraint.kind === 'tentacle' ? primaryTransitRoutes[0]?.id : scopedRoutes[0]?.id) : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' ? undefined : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
+                    {usesCategory && <label className="wide">Subject<select value={category} disabled={!!askedRecord} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? (constraint.kind === 'tentacle' ? primaryTransitRoutes[0]?.id : scopedRoutes[0]?.id) : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' ? undefined : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label} · asked {priorUsesFor(constraint, { ...constraint, category: item.id })}x</option>)}</select></label>}
                     {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s moving transit service<select value={constraint.regionId ?? ''} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{scopedRoutes.map((route) => <option key={route.id} value={route.id}>{transitRouteLabel(route)}</option>)}</select></label>}
                     {!solo && constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
+                  {!askedRecord && definition.baseDrawCount !== undefined && definition.baseKeepCount !== undefined && <p className="question-cost">Selected card asked {selectedPriorUses}x before · next reward: perform “draw {definition.baseDrawCount}, keep {definition.baseKeepCount}” {selectedPriorUses + 1}× ({cardsForQuestion(constraint, selectedPriorUses)} drawn, {keptCardsForQuestion(constraint, selectedPriorUses)} kept total).</p>}
                   {constraint.kind === 'matching-region' && category === 'transit-route' && <p className="derived">No distance applies. “Yes” keeps only stations where this service actually stops; “No” removes those stations.</p>}
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{constraint.originSet === false ? 'set the seeker pin' : matchingSource ?? 'set the seeker pin'}</b></p>}
                   {usesOrigin && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}

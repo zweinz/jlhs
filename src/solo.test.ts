@@ -10,6 +10,7 @@ import {
   keptCardsFromQuestionUses,
   migrateSoloPhotoKind,
   publicSoloDisplayText,
+  questionUseCounts,
   sfLocalDateTimeToIso,
   soloPhotoPlan,
   soloRevealMapFeatures,
@@ -38,6 +39,19 @@ describe('Solo question accounting', () => {
   it('uses distance for radar identity and subject for category cards', () => {
     expect(canonicalQuestionKey({ kind: 'radar', distanceMiles: 0.25 })).toBe('radar:0.250');
     expect(canonicalQuestionKey({ kind: 'measuring', category: 'museum' })).toBe('measuring:museum');
+  });
+
+  it('counts prior uses by the repeat-rule card identity', () => {
+    expect(questionUseCounts([
+      { kind: 'radar', distanceMiles: 0.25 },
+      { kind: 'radar', distanceMiles: 0.25 },
+      { kind: 'radar', distanceMiles: 1 },
+      { kind: 'matching-region', category: 'museum' },
+    ])).toEqual({
+      'radar:0.250': 2,
+      'radar:1.000': 1,
+      'matching-region:museum': 1,
+    });
   });
 
   it('sanitizes legacy response details while preserving named Tentacle answers', () => {

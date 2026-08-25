@@ -202,6 +202,7 @@ article.radar-preview-active {
   font-weight: 750;
 }
 .control-grid .wide { grid-column: 1 / -1; }
+.question-cost { margin: .55rem 0 0; color: #3f4d5a; font-size: .8rem; font-weight: 700; }
 .stacked, .inline-controls label {
   display: grid;
   gap: .25rem;

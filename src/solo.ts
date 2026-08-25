@@ -120,6 +120,14 @@ export function canonicalQuestionKey(constraint: Pick<Constraint, 'kind' | 'dist
   return `${constraint.kind}:${constraint.category ?? 'default'}`;
 }
 
+export function questionUseCounts(constraints: Array<Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>>) {
+  return constraints.reduce<Record<string, number>>((counts, constraint) => {
+    const key = canonicalQuestionKey(constraint);
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
 export function cardsForQuestion(constraint: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>, priorUses: number) {
   const base = QUESTION_DEFINITIONS[constraint.kind].baseDrawCount ?? 0;
   return base * (priorUses + 1);

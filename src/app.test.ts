@@ -5,7 +5,7 @@ import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { combineConstraints, constraintArea, excludedArea, partition, partitionLabelPosition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer, solveHiderQuestion } from './hider';
-import { missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady } from './questions';
+import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, RULEBOOK_DISTANCE_CHOICES } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
@@ -117,6 +117,13 @@ describe('SF rulebook audit', () => {
   it('records the custom radar and thermometer game modifications', () => {
     expect(QUESTION_DEFINITIONS.radar.notes.join(' ')).toMatch(/custom radar/i);
     expect(QUESTION_DEFINITIONS.thermometer.notes.join(' ')).toMatch(/custom thermometer/i);
+  });
+
+  it('offers the printed small-game distance cards plus custom entry', () => {
+    expect(RULEBOOK_DISTANCE_CHOICES.radar).toEqual([0.25, 0.5, 1, 3, 5, 10, 25, 50, 100]);
+    expect(RULEBOOK_DISTANCE_CHOICES.thermometer).toEqual([0.5, 3]);
+    expect(formatQuestionDistance(0.25)).toBe('¼ mile');
+    expect(formatQuestionDistance(0.5)).toBe('½ mile');
   });
 
   it('does not expose hider-side matching values in AI or helper responses', () => {
