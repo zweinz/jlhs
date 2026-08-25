@@ -24,8 +24,10 @@ export interface Constraint {
   enabled: boolean;
   answer: Answer;
   origin: Position;
+  originSet?: boolean;
   originMapUrl?: string;
   target?: Position;
+  targetSet?: boolean;
   targetMapUrl?: string;
   distanceMiles?: number;
   direction?: 'north' | 'south' | 'east' | 'west';

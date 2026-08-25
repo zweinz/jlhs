@@ -1,4 +1,4 @@
-import type { QuestionKind } from './types';
+import type { Constraint, QuestionKind } from './types';
 
 export type QuestionDefinition = {
   label: string;
@@ -10,6 +10,48 @@ export type QuestionDefinition = {
   baseKeepCount?: number;
   timeLimit?: string;
 };
+
+const originKinds = new Set<QuestionKind>([
+  'radar', 'radius', 'thermometer', 'measuring', 'coastline', 'tentacle',
+  'direction', 'closer', 'farther', 'intersection', 'exclusion',
+]);
+const targetKinds = new Set<QuestionKind>(['thermometer', 'closer', 'farther']);
+const distanceKinds = new Set<QuestionKind>([
+  'radar', 'radius', 'thermometer', 'tentacle', 'closer', 'farther', 'intersection', 'exclusion',
+]);
+const categoryKinds = new Set<QuestionKind>(['matching-region', 'measuring', 'tentacle', 'photo-reference']);
+
+export function questionRequiresOrigin(constraint: Pick<Constraint, 'kind' | 'category'>) {
+  return originKinds.has(constraint.kind) ||
+    (constraint.kind === 'matching-region' && constraint.category !== 'transit-route');
+}
+
+export function questionRequiresTarget(constraint: Pick<Constraint, 'kind'>) {
+  return targetKinds.has(constraint.kind);
+}
+
+export function missingQuestionFields(constraint: Constraint) {
+  const missing: string[] = [];
+  if (questionRequiresOrigin(constraint) && constraint.originSet === false) {
+    missing.push(constraint.kind === 'thermometer' ? 'starting pin' : 'seeker pin');
+  }
+  if (questionRequiresTarget(constraint) && constraint.targetSet === false) {
+    missing.push(constraint.kind === 'thermometer' ? 'ending pin' : 'comparison pin');
+  }
+  if (distanceKinds.has(constraint.kind) &&
+      (!Number.isFinite(constraint.distanceMiles) || (constraint.distanceMiles ?? 0) <= 0)) {
+    missing.push('distance');
+  }
+  if (categoryKinds.has(constraint.kind) && !constraint.category) missing.push('subject');
+  if (constraint.kind === 'matching-region' && constraint.category === 'transit-route' && !constraint.regionId) {
+    missing.push('transit service');
+  }
+  return missing;
+}
+
+export function questionIsReady(constraint: Constraint) {
+  return missingQuestionFields(constraint).length === 0;
+}
 
 const manualNote = 'Manual map operation supplied for SF play; this is not a standalone rulebook card.';
 const commonQuestionNotes = [

@@ -16,7 +16,7 @@ import { hiderAnswer } from './hider';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { createLongPressController } from './longPress';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
-import { orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
+import { missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, questionRequiresOrigin, questionRequiresTarget } from './questions';
 import {
   MATCHING_SUBJECTS,
   MEASURING_SUBJECTS,
@@ -113,6 +113,7 @@ function showMapLinkCard(
   url: string,
   onMessage: (message: string) => void,
   title = 'Selected Google Maps place',
+  onClose?: () => void,
 ) {
   const header = document.createElement('strong');
   header.textContent = title;
@@ -140,6 +141,8 @@ function showMapLinkCard(
   });
   actions.append(open, copy);
   content.append(description, actions);
+  google.maps.event.clearListeners(infoWindow, 'closeclick');
+  if (onClose) infoWindow.addListener('closeclick', onClose);
   infoWindow.setOptions({ position, headerContent: header, content, ariaLabel: 'Selected Google Maps place' });
   infoWindow.open({ map });
 }
@@ -379,7 +382,7 @@ export default function App() {
     const infoWindow = placeInfoWindowRef.current;
     if (!map || !infoWindow) return;
     setDroppedPin(position);
-    showMapLinkCard(infoWindow, map, position, googleMapsLinkForPosition(position), setMessage, 'Dropped pin');
+    showMapLinkCard(infoWindow, map, position, googleMapsLinkForPosition(position), setMessage, 'Dropped pin', () => setDroppedPin(undefined));
   }), []);
 
   const partitions = useMemo(
@@ -434,8 +437,9 @@ export default function App() {
     [tracePoints],
   );
   const selectedRadar = state.constraints.find(
-    (constraint) => constraint.id === selectedConstraintId && constraint.kind === 'radar',
+    (constraint) => constraint.id === selectedConstraintId && constraint.kind === 'radar' && questionIsReady(constraint),
   );
+  const readyConstraints = state.constraints.filter(questionIsReady);
 
   useEffect(() => {
     if (!solo) {
@@ -876,7 +880,7 @@ export default function App() {
       if (longPress.shouldSuppressClick()) return;
       if (event.feature.getProperty('kind') === 'dropped-pin' && event.latLng) {
         const position = { lat: event.latLng.lat(), lng: event.latLng.lng() };
-        showMapLinkCard(placeInfoWindowRef.current!, map, position, googleMapsLinkForPosition(position), setMessage, 'Dropped pin');
+        showMapLinkCard(placeInfoWindowRef.current!, map, position, googleMapsLinkForPosition(position), setMessage, 'Dropped pin', () => setDroppedPin(undefined));
         return;
       }
       if (traceActive && event.latLng) {
@@ -897,9 +901,13 @@ export default function App() {
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
       ...current,
-      constraints: current.constraints.map((constraint) =>
-        constraint.id === id ? { ...constraint, ...update } : constraint,
-      ),
+      constraints: current.constraints.map((constraint) => {
+        if (constraint.id !== id) return constraint;
+        const wasReady = questionIsReady(constraint);
+        const next = { ...constraint, ...update };
+        const ready = questionIsReady(next);
+        return { ...next, enabled: ready ? (!wasReady ? true : next.enabled) : false };
+      }),
     }));
 
   const add = () => {
@@ -908,25 +916,26 @@ export default function App() {
     const origin = state.viewport.center;
     const regionId = category ? nearestPoi(category, origin)?.id : undefined;
     const id = crypto.randomUUID();
+    const draft: Constraint = {
+      id,
+      name: QUESTION_DEFINITIONS[kind].label,
+      kind,
+      enabled: false,
+      answer: defaultAnswer(kind),
+      origin,
+      originSet: !questionRequiresOrigin({ kind, category }),
+      target: { lat: 37.7857, lng: -122.4011 },
+      targetSet: !questionRequiresTarget({ kind }),
+      distanceMiles: kind === 'tentacle' ? 1 : kind === 'thermometer' ? 3 : kind === 'radar' ? 0.25 : 1,
+      direction: 'north',
+      category,
+      regionId,
+    };
+    draft.enabled = questionIsReady(draft);
     setSelectedConstraintId(id);
     setState((current) => ({
       ...current,
-      constraints: [
-        {
-          id,
-          name: QUESTION_DEFINITIONS[kind].label,
-          kind,
-          enabled: true,
-          answer: defaultAnswer(kind),
-          origin,
-          target: { lat: 37.7857, lng: -122.4011 },
-          distanceMiles: kind === 'tentacle' ? 1 : kind === 'thermometer' ? 3 : kind === 'radar' ? 0.25 : 1,
-          direction: 'north',
-          category,
-          regionId,
-        },
-        ...current.constraints,
-      ],
+      constraints: [draft, ...current.constraints],
     }));
   };
 
@@ -941,7 +950,12 @@ export default function App() {
     const category = constraint.category ?? defaultCategory(constraint.kind);
     const derivedRegion =
       constraint.kind === 'matching-region' && category ? nearestPoi(category, position)?.id : constraint.regionId;
-    patchConstraint(constraint.id, { ...update, regionId: derivedRegion });
+    patchConstraint(constraint.id, {
+      ...update,
+      ...('origin' in update ? { originSet: true } : {}),
+      ...('target' in update ? { targetSet: true } : {}),
+      regionId: derivedRegion,
+    });
     mapRef.current?.panTo(position);
     if ((mapRef.current?.getZoom() ?? 0) < 14) mapRef.current?.setZoom(14);
   };
@@ -967,7 +981,8 @@ export default function App() {
   const setEveryQuestionEnabled = (enabled: boolean) =>
     setState((current) => ({
       ...current,
-      constraints: setAllConstraintsEnabled(current.constraints, enabled),
+      constraints: setAllConstraintsEnabled(current.constraints, enabled)
+        .map((constraint) => questionIsReady(constraint) ? constraint : { ...constraint, enabled: false }),
     }));
 
   const setAllRouteEligibility = (value: Eligibility | '') =>
@@ -1359,18 +1374,20 @@ export default function App() {
           <section className="questions">
             <div className="section-heading"><h2>Questions</h2></div>
             <div className="two-buttons bulk-question-buttons" role="group" aria-label="Enable or disable all questions">
-              <button type="button" className="secondary" disabled={state.constraints.length === 0 || state.constraints.every((constraint) => constraint.enabled)} onClick={() => setEveryQuestionEnabled(true)}>Enable all</button>
-              <button type="button" className="secondary" disabled={state.constraints.length === 0 || state.constraints.every((constraint) => !constraint.enabled)} onClick={() => setEveryQuestionEnabled(false)}>Disable all</button>
+              <button type="button" className="secondary" disabled={readyConstraints.length === 0 || readyConstraints.every((constraint) => constraint.enabled)} onClick={() => setEveryQuestionEnabled(true)}>Enable all complete</button>
+              <button type="button" className="secondary" disabled={readyConstraints.length === 0 || readyConstraints.every((constraint) => !constraint.enabled)} onClick={() => setEveryQuestionEnabled(false)}>Disable all</button>
             </div>
             <div className="add"><select id="kind" aria-label="Question type">{PRIMARY_QUESTION_KINDS.map((kind) => <option key={kind} value={kind}>{QUESTION_DEFINITIONS[kind].label}</option>)}</select><button onClick={add}>Add</button></div>
             {state.constraints.length === 0 && <p className="empty-state">Add a question, then paste the Google Maps links the players shared.</p>}
             {state.constraints.map((constraint) => {
               const definition = QUESTION_DEFINITIONS[constraint.kind];
-              const usesOrigin = constraint.kind !== 'photo-reference' && !(constraint.kind === 'matching-region' && constraint.category === 'transit-route');
-              const usesTarget = ['thermometer', 'closer', 'farther'].includes(constraint.kind);
+              const usesOrigin = questionRequiresOrigin(constraint);
+              const usesTarget = questionRequiresTarget(constraint);
               const usesDistance = ['radar', 'thermometer', 'radius', 'tentacle', 'closer', 'farther', 'intersection', 'exclusion'].includes(constraint.kind);
               const usesCategory = ['matching-region', 'measuring', 'tentacle', 'photo-reference'].includes(constraint.kind);
               const category = constraint.category;
+              const missingFields = missingQuestionFields(constraint);
+              const questionReady = missingFields.length === 0;
               const askedRecord = solo?.questions[constraint.id];
               const categoryChoices = solo && constraint.kind === 'photo-reference' ? soloPhotoChoices : subjectChoices(constraint.kind);
               const questionNotes = solo && constraint.kind === 'photo-reference'
@@ -1400,9 +1417,10 @@ export default function App() {
                   onClick={() => selectConstraint(constraint)}
                   onFocusCapture={() => selectConstraint(constraint)}
                 >
-                  <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
+                  <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} disabled={!questionReady} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
                   <p className="question-help">{definition.help}</p>
-                  {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition ? '' : 'waiting'}`}><span>Hider answer</span><strong>{state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
+                  {!questionReady && <p className="draft-status">Draft disabled · add {missingFields.join(' and ')} to enable it.</p>}
+                  {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition && questionReady ? '' : 'waiting'}`}><span>Hider answer</span><strong>{!questionReady ? 'Complete the draft first' : state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
                   {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={`${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
                     {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'] })}>{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
@@ -1413,10 +1431,10 @@ export default function App() {
                     {!solo && constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
                   {constraint.kind === 'matching-region' && category === 'transit-route' && <p className="derived">No distance applies. “Yes” keeps only stations where this service actually stops; “No” removes those stations.</p>}
-                  {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{matchingSource ?? 'set the seeker pin'}</b></p>}
+                  {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{constraint.originSet === false ? 'set the seeker pin' : matchingSource ?? 'set the seeker pin'}</b></p>}
                   {usesOrigin && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
                   {usesTarget && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
-                  {solo && !askedRecord && <button type="button" className="full keep" disabled={soloBusy || !!solo.reveal} onClick={() => void askSolo(constraint)}>{soloBusy ? 'AI is answering…' : 'Ask AI'}</button>}
+                  {solo && !askedRecord && <button type="button" className="full keep" disabled={!questionReady || soloBusy || !!solo.reveal} onClick={() => void askSolo(constraint)}>{soloBusy ? 'AI is answering…' : 'Ask AI'}</button>}
                   <details className="rule-notes"><summary>Rulebook notes</summary>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate map support' : selectedSubject.support === 'reference' ? 'Reference card' : 'Mapped exactly'}</b></p>}<ul>{orderedRuleNotes(constraint.kind, questionNotes, selectedSubject?.notes).map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</details>
                   {!askedRecord && <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>}
                 </article>
@@ -1431,7 +1449,7 @@ export default function App() {
               <h3 id="storage-summary-title">Storage, refresh, and sharing</h3>
               <dl>
                 <div><dt>Seeker ↔ Hider Helper</dt><dd>These are two views of one human workspace, not separate games. Switching modes carries the same questions, recorded answers, station/route cuts, layers, and map viewport. The Hider Helper’s calculated answer is display-only and does not overwrite the recorded answer. Its private position remains available while this tab is open, but is hidden in Seeker mode and excluded from sharing.</dd></div>
-                <div><dt>Draft question preview</dt><dd>Adding a question creates an enabled draft whose temporary seeker/start pin is the map’s current center, so its geometry updates the map immediately. The viewport may have come from this tab or a shared URL; it is not GPS and is not the private hider position. Setting the question pin replaces it. A new Thermometer also starts with a temporary ending pin at <code>37.7857, −122.4011</code>.</dd></div>
+                <div><dt>Draft questions</dt><dd>A new question remains disabled and does not change the map until every required pin and option has been set. The card lists what is missing and enables itself when the last required field is completed; after that, Enabled can be switched off or on normally. No map-center or private hider location is used as an active draft answer.</dd></div>
                 <div><dt>Normal workspace</dt><dd>Edits live only in this browser tab. A refresh restores the configuration currently in the URL; without a <code>config</code> value, it starts fresh. Merely switching between Seeker and Hider Helper does not write anything to the URL or server.</dd></div>
                 <div><dt>Share URL</dt><dd>Choosing “Share map” writes a one-time snapshot of the human workspace into the URL; it is not live synchronization. It includes the selected human mode, question pins and recorded answers, station/route cuts, layers, and viewport. The recipient can switch between Seeker and Hider Helper, but later edits in either browser do not carry over. The snapshot excludes the private hider position, current location, path trace, Solo session, route, central station, and hiding spot.</dd></div>
                 <div><dt>Solo game</dt><dd>The encrypted 48-hour session token, card totals, question history, Solo board, and pre-Solo workspace are saved in this browser’s local storage. Refreshing this browser resumes it; another person or browser does not share the game.</dd></div>

@@ -192,6 +192,7 @@ article.radar-preview-active {
 }
 .constraint-heading > input { font-weight: 750; }
 .question-help { margin: 0 0 .6rem; color: #586573; font-size: .82rem; }
+.draft-status { margin: .35rem 0 .6rem; padding: .45rem .55rem; border-radius: .4rem; background: #fff7ed; color: #9a3412; font-size: .78rem; font-weight: 750; }
 .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
 .control-grid label, .map-link-field label {
   display: grid;

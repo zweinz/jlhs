@@ -87,7 +87,9 @@ export function validateState(value: unknown): SharedState {
       !kinds.has(candidate.kind) ||
       !answers.has(candidate.answer) ||
       !validPosition(candidate.origin) ||
+      (candidate.originSet !== undefined && typeof candidate.originSet !== 'boolean') ||
       (candidate.target !== undefined && !validPosition(candidate.target)) ||
+      (candidate.targetSet !== undefined && typeof candidate.targetSet !== 'boolean') ||
       !validGoogleMapsUrl(candidate.originMapUrl) ||
       !validGoogleMapsUrl(candidate.targetMapUrl) ||
       (candidate.distanceMiles !== undefined &&

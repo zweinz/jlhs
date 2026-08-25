@@ -5,7 +5,7 @@ import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { combineConstraints, constraintArea, excludedArea, partition, partitionLabelPosition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer, solveHiderQuestion } from './hider';
-import { orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
+import { missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
@@ -71,6 +71,20 @@ it('uses named matching regions', () => {
 });
 
 describe('SF rulebook audit', () => {
+  it('keeps new location-dependent questions incomplete until every required pin is set', () => {
+    const radar = { ...base('radar'), originSet: false, enabled: false };
+    expect(missingQuestionFields(radar)).toEqual(['seeker pin']);
+    expect(questionIsReady(radar)).toBe(false);
+    expect(questionIsReady({ ...radar, originSet: true })).toBe(true);
+
+    const thermometer = { ...base('thermometer'), originSet: false, targetSet: false, enabled: false };
+    expect(missingQuestionFields(thermometer)).toEqual(['starting pin', 'ending pin']);
+    expect(questionIsReady({ ...thermometer, originSet: true, targetSet: true })).toBe(true);
+
+    const transitMatch = { ...base('matching-region'), category: 'transit-route', regionId: 'N', originSet: false };
+    expect(questionIsReady(transitMatch)).toBe(true);
+  });
+
   it('uses the exact question draw/pick costs without inventing rewards', () => {
     expect(QUESTION_DEFINITIONS.tentacle.drawInstruction).toBe('Draw 4, keep 2');
     expect(QUESTION_DEFINITIONS.measuring.drawInstruction).toBe('Draw 3, keep 1');
