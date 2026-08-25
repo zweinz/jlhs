@@ -14,6 +14,7 @@ import {
 } from './data';
 import { hiderAnswer } from './hider';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
+import { createLongPressController } from './longPress';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
 import { orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import {
@@ -111,9 +112,10 @@ function showMapLinkCard(
   position: Position,
   url: string,
   onMessage: (message: string) => void,
+  title = 'Selected Google Maps place',
 ) {
   const header = document.createElement('strong');
-  header.textContent = 'Selected Google Maps place';
+  header.textContent = title;
   const content = document.createElement('div');
   content.className = 'map-place-card';
   const description = document.createElement('p');
@@ -371,6 +373,14 @@ export default function App() {
   const [traceScreenshot, setTraceScreenshot] = useState(false);
   const [tracePoints, setTracePoints] = useState<Position[]>([]);
   const [selectedConstraintId, setSelectedConstraintId] = useState<string>();
+  const [droppedPin, setDroppedPin] = useState<Position>();
+  const longPress = useMemo(() => createLongPressController<Position>((position) => {
+    const map = mapRef.current;
+    const infoWindow = placeInfoWindowRef.current;
+    if (!map || !infoWindow) return;
+    setDroppedPin(position);
+    showMapLinkCard(infoWindow, map, position, googleMapsLinkForPosition(position), setMessage, 'Dropped pin');
+  }), []);
 
   const partitions = useMemo(
     () => Object.fromEntries(REGION_CATEGORIES.map((category) => [category, partition(category)])),
@@ -442,6 +452,8 @@ export default function App() {
     }, 6000);
     return () => window.clearTimeout(timeoutId);
   }, [message, status]);
+
+  useEffect(() => () => longPress.dispose(), [longPress]);
 
   useEffect(() => {
     if (!scopedStations.some((station) => station.id === selectedStation)) {
@@ -529,6 +541,7 @@ export default function App() {
     const infoWindow = placeInfoWindowRef.current;
     if (!map || !infoWindow || status !== 'ready') return;
     const listener = map.addListener('click', (event: google.maps.MapMouseEvent | google.maps.IconMouseEvent) => {
+      if (longPress.shouldSuppressClick()) return;
       const latLng = event.latLng;
       if (!latLng) return;
       const position = { lat: latLng.lat(), lng: latLng.lng() };
@@ -546,7 +559,23 @@ export default function App() {
       showMapLinkCard(infoWindow, map, position, googleMapsLinkForPlace(placeId, position), setMessage);
     });
     return () => listener.remove();
-  }, [status, traceActive]);
+  }, [longPress, status, traceActive]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || status !== 'ready') return;
+    const start = map.addListener('mousedown', (event: google.maps.MapMouseEvent) => {
+      if (event.latLng) longPress.start({ lat: event.latLng.lat(), lng: event.latLng.lng() });
+    });
+    const mouseup = map.addListener('mouseup', longPress.cancel);
+    const dragstart = map.addListener('dragstart', longPress.cancel);
+    return () => {
+      start.remove();
+      mouseup.remove();
+      dragstart.remove();
+      longPress.cancel();
+    };
+  }, [longPress, status]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -692,6 +721,13 @@ export default function App() {
         geometry: { type: 'Point', coordinates: [currentLocation.lng, currentLocation.lat] },
       });
     }
+    if (droppedPin) {
+      data.addGeoJson({
+        type: 'Feature',
+        properties: { kind: 'dropped-pin', areaName: 'Dropped pin' },
+        geometry: { type: 'Point', coordinates: [droppedPin.lng, droppedPin.lat] },
+      });
+    }
     if (solo?.reveal) soloRevealMapFeatures(solo.reveal).forEach((feature) => data.addGeoJson(feature));
     const displayedArea = state.areaDisplayMode === 'excluded-red'
       ? { area: excluded, kind: 'excluded' }
@@ -764,6 +800,17 @@ export default function App() {
           zIndex: 59,
         };
       }
+      if (kind === 'dropped-pin') {
+        const pin = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="48" viewBox="0 0 40 48"><path d="M20 1C9.5 1 1 9.5 1 20c0 13 19 27 19 27s19-14 19-27C39 9.5 30.5 1 20 1Z" fill="#dc2626" stroke="white" stroke-width="2"/><circle cx="20" cy="19" r="7" fill="white"/></svg>';
+        return {
+          icon: {
+            url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(pin)}`,
+            scaledSize: new google.maps.Size(34, 41),
+            anchor: new google.maps.Point(17, 40),
+          },
+          zIndex: 61,
+        };
+      }
       if (kind === 'transit-route') {
         const mode = feature.getProperty('mode');
         return {
@@ -826,6 +873,12 @@ export default function App() {
       return { fillColor: regionColor, fillOpacity: kind === 'geographic-region' ? 0.07 : 0.14, strokeColor: regionColor, strokeWeight: kind === 'geographic-region' ? 2 : 1.5, zIndex: kind === 'region' ? 4 : 2 };
     });
     data.addListener('click', (event: google.maps.Data.MouseEvent) => {
+      if (longPress.shouldSuppressClick()) return;
+      if (event.feature.getProperty('kind') === 'dropped-pin' && event.latLng) {
+        const position = { lat: event.latLng.lat(), lng: event.latLng.lng() };
+        showMapLinkCard(placeInfoWindowRef.current!, map, position, googleMapsLinkForPosition(position), setMessage, 'Dropped pin');
+        return;
+      }
       if (traceActive && event.latLng) {
         const next = { lat: event.latLng.lat(), lng: event.latLng.lng() };
         if (insideSanFrancisco(next)) setTracePoints((current) => [...current, next]);
@@ -834,7 +887,12 @@ export default function App() {
       const areaName = event.feature.getProperty('areaName');
       if (typeof areaName === 'string') setMessage(areaName);
     });
-  }, [currentLocation, currentLocationVisible, eligibleIds, excluded, feasible, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.reveal, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
+    data.addListener('mousedown', (event: google.maps.Data.MouseEvent) => {
+      if (event.latLng) longPress.start({ lat: event.latLng.lat(), lng: event.latLng.lng() });
+    });
+    data.addListener('mouseup', longPress.cancel);
+    data.addListener('mouseout', longPress.cancel);
+  }, [currentLocation, currentLocationVisible, droppedPin, eligibleIds, excluded, feasible, longPress, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.reveal, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => ({
@@ -1250,6 +1308,7 @@ export default function App() {
             </div>
             <p className="helper">{eligibleIds.length} of {scopedStations.length} stations currently possible. A station turns off when its hiding-radius zone no longer overlaps the green feasible area; explicit station and route cuts also apply.</p>
             <p className="helper">The current-location layer stays on this device and is never included in shared URLs.</p>
+            <p className="helper">Press and hold anywhere on the map—including shaded areas and markers—to drop a temporary pin, then open or copy its Google Maps link.</p>
           </details>
 
           <details className="panel">
@@ -1377,7 +1436,7 @@ export default function App() {
                 <div><dt>Share URL</dt><dd>Choosing “Share map” writes a one-time snapshot of the human workspace into the URL; it is not live synchronization. It includes the selected human mode, question pins and recorded answers, station/route cuts, layers, and viewport. The recipient can switch between Seeker and Hider Helper, but later edits in either browser do not carry over. The snapshot excludes the private hider position, current location, path trace, Solo session, route, central station, and hiding spot.</dd></div>
                 <div><dt>Solo game</dt><dd>The encrypted 48-hour session token, card totals, question history, Solo board, and pre-Solo workspace are saved in this browser’s local storage. Refreshing this browser resumes it; another person or browser does not share the game.</dd></div>
                 <div><dt>Server</dt><dd>Solo requests are processed statelessly: the app has no game-session database. The server reads and replaces the encrypted token and calls Google for routing and Street View without putting the Solo secret in a share URL.</dd></div>
-                <div><dt>Temporary location data</dt><dd>Current-location display and path traces remain in page memory and disappear on refresh. A GPS or pasted finish pin is sent to the server only when checking the Solo hiding spot.</dd></div>
+                <div><dt>Temporary location data</dt><dd>Current-location display, path traces, and a manually dropped map pin remain in page memory and disappear on refresh. A GPS or pasted finish pin is sent to the server only when checking the Solo hiding spot.</dd></div>
               </dl>
             </section>
             <p className="source">{provenance.totalPois.toLocaleString()} normalized POIs from <a href={provenance.sourceUrl}>the SF spreadsheet</a> · retrieved {provenance.retrieved}</p>
