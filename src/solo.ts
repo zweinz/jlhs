@@ -262,8 +262,14 @@ export function soloStateForNewGame(base: SharedState): SharedState {
   };
 }
 
-export function soloRevealMapFeature(spot: Position) {
-  return turf.point([spot.lng, spot.lat], { kind: 'solo-reveal', areaName: 'AI hiding spot' });
+export function soloRevealMapFeatures(reveal: Pick<SoloReveal, 'station' | 'spot'>) {
+  return [
+    turf.point(
+      [reveal.station.position.lng, reveal.station.position.lat],
+      { kind: 'solo-reveal-station', areaName: `Central station: ${reveal.station.name}` },
+    ),
+    turf.point([reveal.spot.lng, reveal.spot.lat], { kind: 'solo-reveal', areaName: 'AI hiding spot' }),
+  ];
 }
 
 export async function verifyRevealCommitment(reveal: SoloReveal) {

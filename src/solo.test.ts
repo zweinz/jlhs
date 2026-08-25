@@ -12,7 +12,7 @@ import {
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
   soloPhotoPlan,
-  soloRevealMapFeature,
+  soloRevealMapFeatures,
   SOLO_PHOTO_SUBJECTS,
   stationDifficulty,
   verifyRevealCommitment,
@@ -104,10 +104,15 @@ describe('Solo camera and time rules', () => {
     expect(choosePanorama([near], station)).toBeUndefined();
   });
 
-  it('creates a map marker at the exact revealed hiding spot', () => {
-    const feature = soloRevealMapFeature(spot);
-    expect(feature.geometry.coordinates).toEqual([spot.lng, spot.lat]);
-    expect(feature.properties).toMatchObject({ kind: 'solo-reveal', areaName: 'AI hiding spot' });
+  it('creates distinct map markers for the central station and hiding spot', () => {
+    const [stationFeature, spotFeature] = soloRevealMapFeatures({
+      station: { id: 'station', name: 'Central', position: station },
+      spot,
+    });
+    expect(stationFeature.geometry.coordinates).toEqual([station.lng, station.lat]);
+    expect(stationFeature.properties).toMatchObject({ kind: 'solo-reveal-station', areaName: 'Central station: Central' });
+    expect(spotFeature.geometry.coordinates).toEqual([spot.lng, spot.lat]);
+    expect(spotFeature.properties).toMatchObject({ kind: 'solo-reveal', areaName: 'AI hiding spot' });
   });
 });
 

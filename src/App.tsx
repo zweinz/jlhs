@@ -44,7 +44,7 @@ import {
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
   SOLO_PHOTO_SUBJECTS,
-  soloRevealMapFeature,
+  soloRevealMapFeatures,
   soloStateForNewGame,
   verifyRevealCommitment,
   type SoloClientSession,
@@ -604,6 +604,15 @@ export default function App() {
 
   useEffect(() => {
     const map = mapRef.current;
+    if (!map || status !== 'ready' || !solo?.reveal) return;
+    const bounds = new google.maps.LatLngBounds();
+    bounds.extend(solo.reveal.station.position);
+    bounds.extend(solo.reveal.spot);
+    map.fitBounds(bounds, 80);
+  }, [solo?.reveal, status]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     if (!map || status !== 'ready') return;
     drawn.current?.setMap(null);
     const data = new google.maps.Data({ map });
@@ -683,7 +692,7 @@ export default function App() {
         geometry: { type: 'Point', coordinates: [currentLocation.lng, currentLocation.lat] },
       });
     }
-    if (solo?.reveal) data.addGeoJson(soloRevealMapFeature(solo.reveal.spot));
+    if (solo?.reveal) soloRevealMapFeatures(solo.reveal).forEach((feature) => data.addGeoJson(feature));
     const displayedArea = state.areaDisplayMode === 'excluded-red'
       ? { area: excluded, kind: 'excluded' }
       : { area: feasible, kind: 'feasible' };
@@ -742,6 +751,17 @@ export default function App() {
             anchor: new google.maps.Point(22, 22),
           },
           zIndex: 60,
+        };
+      }
+      if (kind === 'solo-reveal-station') {
+        const stationPin = '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="52" viewBox="0 0 44 52"><path d="M22 1C10.4 1 1 10.4 1 22c0 14.4 21 29 21 29s21-14.6 21-29C43 10.4 33.6 1 22 1Z" fill="#2563eb" stroke="white" stroke-width="2"/><circle cx="22" cy="21" r="12" fill="white"/><text x="22" y="26" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" font-weight="800" fill="#1d4ed8">S</text></svg>';
+        return {
+          icon: {
+            url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(stationPin)}`,
+            scaledSize: new google.maps.Size(38, 45),
+            anchor: new google.maps.Point(19, 44),
+          },
+          zIndex: 59,
         };
       }
       if (kind === 'transit-route') {
@@ -1046,10 +1066,6 @@ export default function App() {
     let reveal = body.reveal;
     if (reveal) reveal = { ...reveal, commitmentValid: await verifyRevealCommitment(reveal) };
     setSolo((current) => current ? { ...current, token: body.token!, phase: body.phase!, reveal: reveal ?? current.reveal } : current);
-    if (reveal) {
-      mapRef.current?.panTo(reveal.spot);
-      mapRef.current?.setZoom(17);
-    }
     if (body.message) setMessage(body.message);
   };
 
@@ -1171,12 +1187,16 @@ export default function App() {
             </details>}
             {solo.reveal && <div className="solo-reveal">
               <h3>{solo.reveal.reason === 'found' ? 'AI hider found' : 'Hiding spot revealed'}</h3>
-              <p><b>{solo.reveal.station.name}</b></p>
               <p className={solo.reveal.commitmentValid ? 'success-line' : 'warning-line'}>{solo.reveal.commitmentValid ? 'Commitment verified — the location did not change.' : 'Commitment verification failed.'}</p>
+              <p><b>Central station</b><br />{solo.reveal.station.name}</p>
+              <div className="map-place-actions">
+                <a href={googleMapsLinkForPosition(solo.reveal.station.position)} target="_blank" rel="noreferrer">Open central station pin</a>
+              </div>
+              <p><b>Hiding location</b></p>
               <img src={solo.reveal.panorama.imageUrl} alt="Street View at the revealed AI hiding spot" />
               <div className="map-place-actions">
                 <a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open exact hiding pin</a>
-                <button type="button" className="secondary" onClick={copySoloRevealPin}>Copy coordinates</button>
+                <button type="button" className="secondary" onClick={copySoloRevealPin}>Copy hiding coordinates</button>
               </div>
               <dl><div><dt>Departure</dt><dd>{new Date(solo.reveal.route.departureTime).toLocaleString()}</dd></div><div><dt>Arrival</dt><dd>{new Date(solo.reveal.route.arrivalTime).toLocaleString()}</dd></div><div><dt>Journey</dt><dd>{Math.round(solo.reveal.route.durationSeconds / 60)} min · {solo.reveal.route.summary.join(' → ')}</dd></div><div><dt>Imagery</dt><dd>{solo.reveal.panorama.date ?? 'date unavailable'}</dd></div></dl>
               <details><summary>Verification proof</summary><code className="proof">{solo.reveal.commitment}</code><p className="helper">Session {solo.reveal.sessionId}<br />Salt {solo.reveal.salt}</p></details>
