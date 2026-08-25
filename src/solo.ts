@@ -5,6 +5,15 @@ import type { Constraint, Position, SharedState } from './types';
 export type SoloPhase = 'seeking' | 'end-game' | 'found' | 'gave-up';
 
 export type SoloPhotoKind =
+  | 'any-building-visible-from-station'
+  | 'widest-street'
+  | 'a-tree'
+  | 'tallest-structure-in-your-sightline'
+  | 'the-sky'
+  | 'tallest-building-visible-from-station'
+  | 'two-buildings';
+
+export type LegacySoloPhotoKind =
   | 'cardinal-view'
   | 'toward-station'
   | 'away-from-station'
@@ -12,14 +21,41 @@ export type SoloPhotoKind =
   | 'ground-and-path'
   | 'wide-streetscape';
 
+export type AnySoloPhotoKind = SoloPhotoKind | LegacySoloPhotoKind;
+
 export const SOLO_PHOTO_SUBJECTS: Array<{ id: SoloPhotoKind; label: string; help: string }> = [
-  { id: 'cardinal-view', label: 'Cardinal view', help: 'Choose a north, east, south, or west Street View image.' },
-  { id: 'toward-station', label: 'Toward the station', help: 'Street View aimed from the hiding spot toward the hiding station.' },
-  { id: 'away-from-station', label: 'Away from the station', help: 'Street View aimed directly away from the hiding station.' },
-  { id: 'sky-above', label: 'Sky above', help: 'Street View aimed straight up from the hiding spot.' },
-  { id: 'ground-and-path', label: 'Ground and path', help: 'Street View pitched down toward the route to the station.' },
-  { id: 'wide-streetscape', label: 'Wide streetscape', help: 'A repeatable, session-selected 120° street scene.' },
+  { id: 'any-building-visible-from-station', label: 'Any building visible from station', help: 'Rulebook-card approximation from the station panorama, framed upward to include a nearby building.' },
+  { id: 'widest-street', label: 'Widest street', help: 'Rulebook-card approximation using a wide view from the committed hiding panorama.' },
+  { id: 'a-tree', label: 'A tree', help: 'Rulebook-card approximation using a narrower streetscape view from the committed hiding panorama.' },
+  { id: 'tallest-structure-in-your-sightline', label: 'Tallest structure in your sightline', help: 'Rulebook-card approximation pitched upward from the committed hiding panorama.' },
+  { id: 'the-sky', label: 'The sky', help: 'Rulebook-card approximation aimed straight up from the committed hiding panorama.' },
+  { id: 'tallest-building-visible-from-station', label: 'Tallest building visible from station', help: 'Medium-game rulebook-card approximation from the station panorama, using a different view from the any-building card.' },
+  { id: 'two-buildings', label: 'Two buildings', help: 'Medium-game rulebook-card approximation using a wide streetscape from the committed hiding panorama.' },
 ];
+
+export const LEGACY_SOLO_PHOTO_KINDS: LegacySoloPhotoKind[] = [
+  'cardinal-view',
+  'toward-station',
+  'away-from-station',
+  'sky-above',
+  'ground-and-path',
+  'wide-streetscape',
+];
+
+const legacyPhotoMigration: Record<LegacySoloPhotoKind, SoloPhotoKind> = {
+  'cardinal-view': 'a-tree',
+  'toward-station': 'any-building-visible-from-station',
+  'away-from-station': 'tallest-building-visible-from-station',
+  'sky-above': 'the-sky',
+  'ground-and-path': 'widest-street',
+  'wide-streetscape': 'two-buildings',
+};
+
+export function migrateSoloPhotoKind(value?: string) {
+  return value && LEGACY_SOLO_PHOTO_KINDS.includes(value as LegacySoloPhotoKind)
+    ? legacyPhotoMigration[value as LegacySoloPhotoKind]
+    : value;
+}
 
 export type SoloQuestionRecord = {
   id: string;
@@ -124,21 +160,61 @@ export function bearingDegrees(from: Position, to: Position) {
   return (turf.bearing([from.lng, from.lat], [to.lng, to.lat]) + 360) % 360;
 }
 
-export function photoCamera(
-  kind: SoloPhotoKind,
+export type SoloPhotoPlan = {
+  source: 'spot' | 'station';
+  displayText: string;
+  heading: number;
+  pitch: number;
+  fov: number;
+};
+
+const normalizedHeading = (heading: number) => ((heading % 360) + 360) % 360;
+
+export function soloPhotoPlan(
+  kind: AnySoloPhotoKind,
   spot: Position,
   station: Position,
   cardinalDirection: Constraint['direction'] = 'north',
   seededHeading = 0,
-) {
+): SoloPhotoPlan {
   const toward = bearingDegrees(spot, station);
   const cardinal = { north: 0, east: 90, south: 180, west: 270 }[cardinalDirection ?? 'north'];
-  if (kind === 'cardinal-view') return { heading: cardinal, pitch: 0, fov: 90 };
-  if (kind === 'toward-station') return { heading: toward, pitch: 0, fov: 90 };
-  if (kind === 'away-from-station') return { heading: (toward + 180) % 360, pitch: 0, fov: 90 };
-  if (kind === 'sky-above') return { heading: 0, pitch: 90, fov: 90 };
-  if (kind === 'ground-and-path') return { heading: toward, pitch: -45, fov: 90 };
-  return { heading: seededHeading % 360, pitch: 0, fov: 120 };
+  const atSpot = (displayText: string, heading: number, pitch: number, fov: number): SoloPhotoPlan => ({
+    source: 'spot', displayText, heading: normalizedHeading(heading), pitch, fov,
+  });
+  const atStation = (displayText: string, heading: number, pitch: number, fov: number): SoloPhotoPlan => ({
+    source: 'station', displayText, heading: normalizedHeading(heading), pitch, fov,
+  });
+
+  if (kind === 'any-building-visible-from-station') {
+    return atStation('Any building visible from station · Street View approximation taken at the hiding station', seededHeading, 8, 90);
+  }
+  if (kind === 'tallest-building-visible-from-station') {
+    return atStation('Tallest building visible from station · Street View approximation taken at the hiding station', seededHeading + 180, 14, 75);
+  }
+  if (kind === 'widest-street') {
+    return atSpot('Widest street · Street View approximation from the AI’s committed hiding spot', seededHeading + 90, 0, 120);
+  }
+  if (kind === 'a-tree') {
+    return atSpot('A tree · Street View approximation from the AI’s committed hiding spot', seededHeading, 0, 75);
+  }
+  if (kind === 'tallest-structure-in-your-sightline') {
+    return atSpot('Tallest structure in your sightline · Street View approximation from the AI’s committed hiding spot', seededHeading + 180, 14, 75);
+  }
+  if (kind === 'the-sky') {
+    return atSpot('The sky · Street View approximation from the AI’s committed hiding spot', seededHeading, 90, 90);
+  }
+  if (kind === 'two-buildings') {
+    return atSpot('Two buildings · Street View approximation from the AI’s committed hiding spot', seededHeading + 270, 0, 120);
+  }
+
+  // Preserve deterministic answers for already-created drafts from the earlier house-rule inventory.
+  if (kind === 'cardinal-view') return atSpot('Cardinal view from the AI’s committed hiding spot', cardinal, 0, 90);
+  if (kind === 'toward-station') return atSpot('View toward the hiding station from the AI’s committed hiding spot', toward, 0, 70);
+  if (kind === 'away-from-station') return atSpot('View away from the hiding station from the AI’s committed hiding spot', toward + 180, 0, 110);
+  if (kind === 'sky-above') return atSpot('Sky above the AI’s committed hiding spot', seededHeading, 90, 90);
+  if (kind === 'ground-and-path') return atSpot('Ground and path at the AI’s committed hiding spot', toward, -45, 90);
+  return atSpot('Wide streetscape from the AI’s committed hiding spot', seededHeading, 0, 120);
 }
 
 function sfOffsetMinutes(instant: Date) {

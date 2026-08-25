@@ -149,7 +149,7 @@ function candidatePoints(station: Position) {
   )];
 }
 
-async function panoramaAt(position: Position) {
+export async function panoramaAt(position: Position) {
   const url = new URL('https://maps.googleapis.com/maps/api/streetview/metadata');
   url.searchParams.set('location', `${position.lat},${position.lng}`);
   url.searchParams.set('radius', '50');
@@ -172,7 +172,7 @@ export async function panoramasInZone(station: Position) {
     const miles = turf.distance([station.lng, station.lat], [panorama.position.lng, panorama.position.lat], { units: 'miles' });
     if (miles <= 0.25) byId.set(panorama.id, panorama);
   });
-  return [...byId.values()];
+  return { stationPanorama: results[0], panoramas: [...byId.values()] };
 }
 
 function randomUnit() {
@@ -188,10 +188,11 @@ export function weightedTake<T extends { score: number }>(items: T[]) {
 }
 
 export function choosePanorama<T extends { position: Position }>(panoramas: T[], station: Position) {
-  const weighted = panoramas.map((panorama) => {
+  const weighted = panoramas.flatMap((panorama) => {
     const miles = turf.distance([station.lng, station.lat], [panorama.position.lng, panorama.position.lat], { units: 'miles' });
+    if (miles < 0.1 || miles > 0.24) return [];
     const edgeWeight = miles >= 0.15 && miles <= 0.24 ? 6 : 1 + Math.min(4, miles * 16);
-    return { panorama, score: edgeWeight };
+    return [{ panorama, score: edgeWeight }];
   });
   return weightedTake(weighted)?.panorama;
 }

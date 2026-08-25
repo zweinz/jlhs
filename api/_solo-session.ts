@@ -20,6 +20,7 @@ export type SecretSoloSession = {
   station: { id: string; name: string; position: Position };
   spot: Position;
   panorama: { id: string; date?: string };
+  stationPanorama?: { id: string; date?: string };
   route: {
     durationSeconds: number;
     distanceMeters: number;

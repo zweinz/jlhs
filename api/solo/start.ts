@@ -26,15 +26,20 @@ export default async function handler(request: Request) {
     const candidates = await reachableStations(body.origin!, departure.toISOString());
     if (candidates.length === 0) return jsonError('No valid station can be reached by transit within 30 minutes from that start.', 422);
 
-    let chosen: { station: (typeof candidates)[number]['station']; route: SecretSoloSession['route']; panorama: Awaited<ReturnType<typeof panoramasInZone>>[number] } | undefined;
+    let chosen: {
+      station: (typeof candidates)[number]['station'];
+      route: SecretSoloSession['route'];
+      panorama: Awaited<ReturnType<typeof panoramasInZone>>['panoramas'][number];
+      stationPanorama: NonNullable<Awaited<ReturnType<typeof panoramasInZone>>['stationPanorama']>;
+    } | undefined;
     while (candidates.length > 0 && !chosen) {
       const candidate = weightedTake(candidates);
       const route = await verifyTransitRoute(body.origin!, candidate.station, departure.toISOString());
       if (!route) continue;
-      const panoramas = await panoramasInZone(candidate.station);
-      if (panoramas.length < 3) continue;
-      const panorama = choosePanorama(panoramas, candidate.station);
-      if (panorama) chosen = { station: candidate.station, route, panorama };
+      const coverage = await panoramasInZone(candidate.station);
+      if (!coverage.stationPanorama || coverage.panoramas.length < 3) continue;
+      const panorama = choosePanorama(coverage.panoramas, candidate.station);
+      if (panorama) chosen = { station: candidate.station, route, panorama, stationPanorama: coverage.stationPanorama };
     }
     if (!chosen) return jsonError('Reachable stations did not have enough outdoor Street View coverage. Try another start time or location.', 422);
 
@@ -58,6 +63,7 @@ export default async function handler(request: Request) {
       station: { id: chosen.station.id, name: chosen.station.name, position: { lat: chosen.station.lat, lng: chosen.station.lng } },
       spot: chosen.panorama.position,
       panorama: { id: chosen.panorama.id, date: chosen.panorama.date },
+      stationPanorama: { id: chosen.stationPanorama.id, date: chosen.stationPanorama.date },
       route: chosen.route,
     };
     session.commitment = await commitmentFor(session);

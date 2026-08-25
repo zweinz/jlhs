@@ -40,6 +40,7 @@ import { decodeState, encodeState } from './share';
 import {
   defaultSfDateTime,
   keptCardsForQuestion,
+  migrateSoloPhotoKind,
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
   SOLO_PHOTO_SUBJECTS,
@@ -144,7 +145,7 @@ const soloPhotoChoices: RulebookSubject[] = SOLO_PHOTO_SUBJECTS.map((subject) =>
   ...subject,
   status: 'in-play',
   support: 'reference',
-  notes: ['Solo house rule: this image is generated from the AI hider’s committed outdoor Street View panorama.'],
+  notes: [subject.help, 'Solo house rule: Street View approximates the rulebook framing without using a vision model.'],
 }));
 
 const SOLO_STORAGE_KEY = 'sf-hiding-area-solo-v1';
@@ -154,6 +155,12 @@ function restoredSolo(): SoloClientSession | undefined {
     const value = localStorage.getItem(SOLO_STORAGE_KEY);
     if (!value) return undefined;
     const session = JSON.parse(value) as SoloClientSession;
+    session.boardState = {
+      ...session.boardState,
+      constraints: session.boardState.constraints.map((constraint) => constraint.kind === 'photo-reference'
+        ? { ...constraint, category: migrateSoloPhotoKind(constraint.category) }
+        : constraint),
+    };
     const constraints = new Map(session.boardState.constraints.map((constraint) => [constraint.id, constraint]));
     session.questions = Object.fromEntries(Object.entries(session.questions).map(([id, record]) => {
       const constraint = constraints.get(id);
@@ -800,7 +807,7 @@ export default function App() {
 
   const add = () => {
     const kind = (document.querySelector('#kind') as HTMLSelectElement).value as QuestionKind;
-    const category = solo && kind === 'photo-reference' ? 'cardinal-view' : defaultCategory(kind);
+    const category = solo && kind === 'photo-reference' ? SOLO_PHOTO_SUBJECTS[0].id : defaultCategory(kind);
     const origin = state.viewport.center;
     const regionId = category ? nearestPoi(category, origin)?.id : undefined;
     const id = crypto.randomUUID();
@@ -1252,7 +1259,7 @@ export default function App() {
               const askedRecord = solo?.questions[constraint.id];
               const categoryChoices = solo && constraint.kind === 'photo-reference' ? soloPhotoChoices : subjectChoices(constraint.kind);
               const questionNotes = solo && constraint.kind === 'photo-reference'
-                ? ['Solo house rule: Google Street View replaces a live hider photo.', 'The server uses the committed outdoor panorama and never exposes its coordinate-bearing Google request URL.', 'If imagery becomes unavailable, “I cannot answer” remains a valid answer.']
+                ? ['Solo house rule: Google Street View approximates a live hider photo.', 'Station cards use a panorama at the hiding station. New games commit other supported cards to a separate hiding panorama at least 0.1 mile from the station.', 'The server never exposes a coordinate-bearing Google request URL.', 'If imagery becomes unavailable, “I cannot answer” remains a valid answer.']
                 : definition.notes;
               const selectedSubject = categoryChoices.find((subject) => subject.id === category);
               const tentacleChoices = constraint.kind === 'tentacle' && category !== 'transit-route'
@@ -1287,7 +1294,6 @@ export default function App() {
                     {usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
                     {constraint.kind === 'direction' && <label>Direction<select value={constraint.direction} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'south', 'east', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
                     {usesCategory && <label className="wide">Subject<select value={category} disabled={!!askedRecord} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? (nextCategory === 'transit-route' || nextCategory === 'aquarium' ? 15 : 1) : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? (constraint.kind === 'tentacle' ? primaryTransitRoutes[0]?.id : scopedRoutes[0]?.id) : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' && nextCategory === 'transit-route' ? state.stationZoneMiles : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
-                    {solo && constraint.kind === 'photo-reference' && category === 'cardinal-view' && <label className="wide">Direction<select value={constraint.direction} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'east', 'south', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
                     {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s transit service<select value={constraint.regionId ?? ''} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{scopedRoutes.map((route) => <option key={route.id} value={route.id}>{transitRouteLabel(route)}</option>)}</select></label>}
                     {!solo && constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>

@@ -1,15 +1,19 @@
 import { SF_BOUNDS } from '../../src/data';
 import { solveHiderQuestion } from '../../src/hider';
 import { QUESTION_DEFINITIONS } from '../../src/questions';
-import { canonicalQuestionKey, cardsForQuestion, keptCardsForQuestion, keptCardsFromQuestionUses, photoCamera, publicSoloDisplayText, SOLO_PHOTO_SUBJECTS, type SoloPhotoKind } from '../../src/solo';
+import { canonicalQuestionKey, cardsForQuestion, keptCardsForQuestion, keptCardsFromQuestionUses, LEGACY_SOLO_PHOTO_KINDS, publicSoloDisplayText, soloPhotoPlan, SOLO_PHOTO_SUBJECTS, type AnySoloPhotoKind } from '../../src/solo';
 import type { Constraint, Position, QuestionKind } from '../../src/types';
+import { panoramaAt } from '../_solo-google';
 import { jsonError, readJson, seal, unseal, type PhotoAsset, type SecretSoloSession } from '../_solo-session';
 
 export const config = { runtime: 'edge' };
 
 type QuestionBody = { token?: string; constraint?: Constraint };
 const kinds = new Set<QuestionKind>(['radar', 'thermometer', 'measuring', 'matching-region', 'tentacle', 'photo-reference']);
-const photoKinds = new Set(SOLO_PHOTO_SUBJECTS.map((subject) => subject.id));
+const photoKinds = new Set<string>([
+  ...SOLO_PHOTO_SUBJECTS.map((subject) => subject.id),
+  ...LEGACY_SOLO_PHOTO_KINDS,
+]);
 
 function validPosition(position?: Position) {
   return !!position && Number.isFinite(position.lat) && Number.isFinite(position.lng) &&
@@ -22,7 +26,7 @@ function validateConstraint(constraint?: Constraint) {
   if (constraint.kind === 'thermometer' && !validPosition(constraint.target)) return false;
   if (constraint.name.length > 200 || (constraint.category?.length ?? 0) > 100) return false;
   if (constraint.distanceMiles !== undefined && (!Number.isFinite(constraint.distanceMiles) || constraint.distanceMiles <= 0 || constraint.distanceMiles > 100)) return false;
-  if (constraint.kind === 'photo-reference' && !photoKinds.has(constraint.category as SoloPhotoKind)) return false;
+  if (constraint.kind === 'photo-reference' && !photoKinds.has(constraint.category ?? '')) return false;
   return true;
 }
 
@@ -44,20 +48,35 @@ export default async function handler(request: Request) {
     let photoUrl: string | undefined;
 
     if (constraint.kind === 'photo-reference') {
-      const camera = photoCamera(
-        constraint.category as SoloPhotoKind,
+      const plan = soloPhotoPlan(
+        constraint.category as AnySoloPhotoKind,
         session.spot,
         session.station.position,
         constraint.direction,
         session.wideHeading,
       );
-      const asset: PhotoAsset = {
-        kind: 'solo-photo', version: 1, expiresAt: session.expiresAt,
-        panoramaId: session.panorama.id, ...camera,
-      };
-      const assetToken = await seal(asset);
-      photoUrl = `/api/solo/photo?token=${encodeURIComponent(assetToken)}`;
-      displayText = 'Street View photo from the AI’s committed hiding spot';
+      let panorama = plan.source === 'station' ? session.stationPanorama : session.panorama;
+      if (plan.source === 'station' && !panorama) {
+        const metadata = await panoramaAt(session.station.position);
+        if (metadata) {
+          panorama = { id: metadata.id, date: metadata.date };
+          session.stationPanorama = panorama;
+        }
+      }
+      if (panorama) {
+        const asset: PhotoAsset = {
+          kind: 'solo-photo', version: 1, expiresAt: session.expiresAt,
+          panoramaId: panorama.id,
+          heading: plan.heading,
+          pitch: plan.pitch,
+          fov: plan.fov,
+        };
+        const assetToken = await seal(asset);
+        photoUrl = `/api/solo/photo?token=${encodeURIComponent(assetToken)}`;
+        displayText = plan.displayText;
+      } else {
+        displayText = 'I cannot answer: outdoor Street View is unavailable at the hiding station';
+      }
       answer = 'yes';
     } else {
       const result = solveHiderQuestion(constraint, session.spot);

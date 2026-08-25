@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chunk, reachableStations, verifyTransitRoute } from '../api/_solo-google';
-import { commitmentFor, seal, unseal, type SecretSoloSession } from '../api/_solo-session';
+import { choosePanorama, chunk, reachableStations, verifyTransitRoute } from '../api/_solo-google';
+import { commitmentFor, seal, unseal, type PhotoAsset, type SecretSoloSession } from '../api/_solo-session';
 import questionHandler from '../api/solo/question';
 import checkLocationHandler from '../api/solo/check-location';
 import {
@@ -8,9 +8,11 @@ import {
   canonicalQuestionKey,
   keptCardsForQuestion,
   keptCardsFromQuestionUses,
-  photoCamera,
+  migrateSoloPhotoKind,
   publicSoloDisplayText,
   sfLocalDateTimeToIso,
+  soloPhotoPlan,
+  SOLO_PHOTO_SUBJECTS,
   stationDifficulty,
   verifyRevealCommitment,
   type SoloReveal,
@@ -20,7 +22,7 @@ describe('Solo question accounting', () => {
   it('multiplies draw costs for repeated cards', () => {
     const radar = { kind: 'radar' as const, distanceMiles: 1 };
     const measuring = { kind: 'measuring' as const, category: 'museum' };
-    const photo = { kind: 'photo-reference' as const, category: 'cardinal-view' };
+    const photo = { kind: 'photo-reference' as const, category: 'a-tree' };
     expect([0, 1, 2].map((uses) => cardsForQuestion(radar, uses))).toEqual([2, 4, 6]);
     expect([0, 1].map((uses) => cardsForQuestion(measuring, uses))).toEqual([3, 6]);
     expect([0, 1].map((uses) => cardsForQuestion(photo, uses))).toEqual([1, 2]);
@@ -48,11 +50,38 @@ describe('Solo camera and time rules', () => {
   const spot = { lat: 37.77, lng: -122.44 };
   const station = { lat: 37.78, lng: -122.44 };
 
-  it('uses fixed API-native camera definitions', () => {
-    expect(photoCamera('cardinal-view', spot, station, 'east')).toEqual({ heading: 90, pitch: 0, fov: 90 });
-    expect(photoCamera('sky-above', spot, station)).toEqual({ heading: 0, pitch: 90, fov: 90 });
-    expect(photoCamera('ground-and-path', spot, station).pitch).toBe(-45);
-    expect(photoCamera('wide-streetscape', spot, station, 'north', 725)).toEqual({ heading: 5, pitch: 0, fov: 120 });
+  it('maps the supported Solo inventory to actual rulebook photo cards', () => {
+    expect(SOLO_PHOTO_SUBJECTS.map((subject) => subject.id)).toEqual([
+      'any-building-visible-from-station',
+      'widest-street',
+      'a-tree',
+      'tallest-structure-in-your-sightline',
+      'the-sky',
+      'tallest-building-visible-from-station',
+      'two-buildings',
+    ]);
+  });
+
+  it('uses the station panorama only for station cards and distinct fixed cameras', () => {
+    const anyBuilding = soloPhotoPlan('any-building-visible-from-station', spot, station, 'north', 42);
+    const tallestBuilding = soloPhotoPlan('tallest-building-visible-from-station', spot, station, 'north', 42);
+    const tree = soloPhotoPlan('a-tree', spot, station, 'north', 42);
+    expect(anyBuilding.source).toBe('station');
+    expect(anyBuilding.displayText).toMatch(/at the hiding station/);
+    expect(tallestBuilding.source).toBe('station');
+    expect(tallestBuilding.heading).not.toBe(anyBuilding.heading);
+    expect(tree.source).toBe('spot');
+    expect(tree.displayText).toMatch(/committed hiding spot/);
+    expect(soloPhotoPlan('the-sky', spot, station, 'north', 42).pitch).toBe(90);
+  });
+
+  it('keeps legacy toward and away views visually distinct while migrating old drafts', () => {
+    const toward = soloPhotoPlan('toward-station', spot, station, 'north', 42);
+    const away = soloPhotoPlan('away-from-station', spot, station, 'north', 42);
+    expect(Math.abs(toward.heading - away.heading)).toBe(180);
+    expect(toward.fov).not.toBe(away.fov);
+    expect(migrateSoloPhotoKind('toward-station')).toBe('any-building-visible-from-station');
+    expect(migrateSoloPhotoKind('sky-above')).toBe('the-sky');
   });
 
   it('converts San Francisco wall time across standard and daylight time', () => {
@@ -64,6 +93,13 @@ describe('Solo camera and time rules', () => {
   it('favors longer trips and sparse station areas', () => {
     expect(stationDifficulty(1800, 0)).toBeCloseTo(1);
     expect(stationDifficulty(300, 10)).toBeLessThan(stationDifficulty(1700, 2));
+  });
+
+  it('never chooses the hiding panorama at the station', () => {
+    const near = { id: 'near', position: { lat: station.lat - 0.0001, lng: station.lng } };
+    const away = { id: 'away', position: { lat: station.lat - 0.0025, lng: station.lng } };
+    expect(choosePanorama([near, away], station)?.id).toBe('away');
+    expect(choosePanorama([near], station)).toBeUndefined();
   });
 });
 
@@ -135,6 +171,7 @@ describe('Solo token and commitment security', () => {
     salt: 'salt', commitment: '', phase: 'seeking', cardsDrawn: 0, questionUses: {}, wideHeading: 42,
     station: { id: 'station', name: 'Station', position: { lat: 37.78, lng: -122.44 } },
     spot: { lat: 37.779, lng: -122.441 }, panorama: { id: 'pano', date: '2026-01' },
+    stationPanorama: { id: 'station-pano', date: '2026-01' },
     route: { durationSeconds: 1200, distanceMeters: 4000, departureTime: '2026-08-24T19:00:00.000Z', arrivalTime: '2026-08-24T19:20:00.000Z', summary: ['Walk', 'N', 'Walk'] },
   });
 
@@ -186,6 +223,37 @@ describe('Solo token and commitment security', () => {
     expect(secondBody.cardsKept).toBe(2);
     expect(secondBody.totalCardsDrawn).toBe(6);
     expect(secondBody.totalCardsKept).toBe(3);
+  });
+
+  it('issues station and hiding-spot photos from separate panoramas with distinct cameras', async () => {
+    const value = session();
+    value.commitment = await commitmentFor(value);
+    const askPhoto = async (category: string) => {
+      const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          token: await seal(value),
+          constraint: {
+            id: category, name: category, kind: 'photo-reference', enabled: true, answer: 'yes',
+            origin: value.spot, category,
+          },
+        }),
+      }));
+      const body = await response.json();
+      expect(response.status).toBe(200);
+      const assetToken = new URL(body.photoUrl, 'https://example.test').searchParams.get('token');
+      expect(assetToken).toBeTruthy();
+      return { body, asset: await unseal<PhotoAsset>(assetToken!, 'solo-photo') };
+    };
+
+    const stationPhoto = await askPhoto('any-building-visible-from-station');
+    const otherStationPhoto = await askPhoto('tallest-building-visible-from-station');
+    const spotPhoto = await askPhoto('a-tree');
+    expect(stationPhoto.asset.panoramaId).toBe('station-pano');
+    expect(stationPhoto.body.displayText).toMatch(/at the hiding station/);
+    expect(otherStationPhoto.asset.heading).not.toBe(stationPhoto.asset.heading);
+    expect(spotPhoto.asset.panoramaId).toBe('pano');
+    expect(spotPhoto.body.displayText).toMatch(/committed hiding spot/);
   });
 
   it('counts a rulebook null answer without adding a geographic constraint', async () => {
