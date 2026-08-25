@@ -7,6 +7,7 @@ import {
   cardsForQuestion,
   canonicalQuestionKey,
   photoCamera,
+  publicSoloDisplayText,
   sfLocalDateTimeToIso,
   stationDifficulty,
   verifyRevealCommitment,
@@ -26,6 +27,13 @@ describe('Solo question accounting', () => {
   it('uses distance for radar identity and subject for category cards', () => {
     expect(canonicalQuestionKey({ kind: 'radar', distanceMiles: 0.25 })).toBe('radar:0.250');
     expect(canonicalQuestionKey({ kind: 'measuring', category: 'museum' })).toBe('measuring:museum');
+  });
+
+  it('sanitizes legacy response details while preserving named Tentacle answers', () => {
+    expect(publicSoloDisplayText('matching-region', 'No — seeker: Presidio Golf Course; hider: Gleneagles')).toBe('No');
+    expect(publicSoloDisplayText('matching-region', 'Yes — Gleneagles')).toBe('Yes');
+    expect(publicSoloDisplayText('measuring', 'Farther (higher elevation)')).toBe('Further');
+    expect(publicSoloDisplayText('tentacle', 'Gleneagles')).toBe('Gleneagles');
   });
 });
 
@@ -127,7 +135,8 @@ describe('Solo token and commitment security', () => {
     const value = session();
     const token = await seal(value);
     await expect(unseal<SecretSoloSession>(token, 'solo-session')).resolves.toEqual(value);
-    await expect(unseal<SecretSoloSession>(`${token.slice(0, -1)}x`, 'solo-session')).rejects.toThrow(/invalid|expired/i);
+    const tamperedToken = `${token.slice(0, -1)}${token.endsWith('x') ? 'y' : 'x'}`;
+    await expect(unseal<SecretSoloSession>(tamperedToken, 'solo-session')).rejects.toThrow(/invalid|expired/i);
   });
 
   it('verifies the public reveal against the original commitment', async () => {
@@ -166,6 +175,26 @@ describe('Solo token and commitment security', () => {
     const secondBody = await second.json();
     expect(secondBody.cardsDrawn).toBe(4);
     expect(secondBody.totalCardsDrawn).toBe(6);
+  });
+
+  it('counts a rulebook null answer without adding a geographic constraint', async () => {
+    const value = session();
+    value.commitment = await commitmentFor(value);
+    const constraint = {
+      id: 'q-null', name: 'Matching commercial airport', kind: 'matching-region' as const,
+      enabled: true, answer: 'yes' as const, origin: value.spot, category: 'commercial-airport',
+    };
+    const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), constraint }),
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.answer).toBe('null');
+    expect(body.displayText).toBe('Null');
+    expect(body.cardsDrawn).toBe(3);
+    expect(body.totalCardsDrawn).toBe(3);
+    expect(body.resolvedRegionId).toBeUndefined();
   });
 
   it('announces end game at the zone and reveals only inside the 30-meter finish radius', async () => {

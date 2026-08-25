@@ -4,7 +4,7 @@ import { excludeAllExcept, setAllConstraintsEnabled, stationStatusesForAll, stat
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { combineConstraints, constraintArea, excludedArea, partition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
-import { hiderAnswer } from './hider';
+import { hiderAnswer, solveHiderQuestion } from './hider';
 import { orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
@@ -104,6 +104,37 @@ describe('SF rulebook audit', () => {
     expect(QUESTION_DEFINITIONS.radar.notes.join(' ')).toMatch(/custom radar/i);
     expect(QUESTION_DEFINITIONS.thermometer.notes.join(' ')).toMatch(/custom thermometer/i);
   });
+
+  it('does not expose hider-side matching values in AI or helper responses', () => {
+    const hider = { lat: 37.73, lng: -122.42 };
+    for (const subject of selectableSubjects(MATCHING_SUBJECTS)) {
+      const result = solveHiderQuestion({
+        ...base('matching-region'),
+        category: subject.id,
+        regionId: subject.id === 'transit-route' ? 'N' : undefined,
+      }, hider);
+      expect(result.displayText, subject.label).toMatch(/^(Yes|No|Null)$/);
+      expect(result.resolvedRegionId, subject.label).toBeUndefined();
+    }
+  });
+
+  it('limits each non-photo response family to its rulebook answer', () => {
+    const hider = { lat: 37.77, lng: -122.44 };
+    expect(solveHiderQuestion(base('radar'), hider).displayText).toMatch(/^(Yes|No)$/);
+    expect(solveHiderQuestion(base('thermometer'), hider).displayText).toMatch(/^(Hotter|Colder)$/);
+    expect(solveHiderQuestion(base('measuring'), hider).displayText).toMatch(/^(Closer|Further|Null)$/);
+
+    const tentacle = solveHiderQuestion({ ...base('tentacle'), origin: hider }, hider);
+    expect(tentacle.answer).toBe('yes');
+    expect(tentacle.resolvedRegionId).toBeTruthy();
+    expect(tentacle.displayText).not.toMatch(/^(Yes|No)$/);
+  });
+
+  it('treats a null answer as a completed question without changing map shading', () => {
+    const nullArea = constraintArea({ ...base('matching-region'), answer: 'null' });
+    const referenceArea = constraintArea(base('photo-reference'));
+    expect(turf.area(nullArea)).toBeCloseTo(turf.area(referenceArea));
+  });
 });
 
 describe('missing measuring and matching geometry', () => {
@@ -140,8 +171,8 @@ describe('missing measuring and matching geometry', () => {
 
   it('answers the added subjects in hider mode', () => {
     const hider = { lat: 37.76, lng: -122.45 };
-    expect(hiderAnswer({ ...base('measuring'), category: 'sea-level' }, hider, {})).toMatch(/Closer|Farther/);
-    expect(hiderAnswer({ ...base('measuring'), category: 'body-of-water' }, hider, {})).toMatch(/Closer|Farther/);
+    expect(hiderAnswer({ ...base('measuring'), category: 'sea-level' }, hider, {})).toMatch(/Closer|Further/);
+    expect(hiderAnswer({ ...base('measuring'), category: 'body-of-water' }, hider, {})).toMatch(/Closer|Further/);
     expect(hiderAnswer({ ...base('matching-region'), category: 'street-path' }, hider, {})).toMatch(/Yes|No/);
     expect(hiderAnswer({ ...base('matching-region'), category: 'supervisor-district' }, hider, {})).toMatch(/Yes|No/);
   });
@@ -250,8 +281,8 @@ it('calculates hider answers for rulebook question families', () => {
   const hider = { lat: 37.7705, lng: -122.4405 };
   expect(hiderAnswer({ ...base('radar'), distanceMiles: 1 }, hider, {})).toBe('Yes');
   expect(['Hotter', 'Colder']).toContain(hiderAnswer({ ...base('thermometer') }, hider, {}));
-  expect(['Closer', 'Farther']).toContain(hiderAnswer({ ...base('measuring') }, hider, {}));
-  expect(['Closer', 'Farther']).toContain(hiderAnswer({ ...base('coastline') }, hider, {}));
+  expect(['Closer', 'Further']).toContain(hiderAnswer({ ...base('measuring') }, hider, {}));
+  expect(['Closer', 'Further']).toContain(hiderAnswer({ ...base('coastline') }, hider, {}));
 });
 
 it('keeps all rulebook notes attached to every primary question', () => {

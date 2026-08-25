@@ -15,7 +15,7 @@ export type QuestionKind =
   | 'matching-region'
   | 'intersection'
   | 'exclusion';
-export type Answer = 'yes' | 'no' | 'warmer' | 'colder' | 'closer' | 'farther' | 'not-within-reach';
+export type Answer = 'yes' | 'no' | 'warmer' | 'colder' | 'closer' | 'farther' | 'null' | 'not-within-reach';
 export type Eligibility = 'in' | 'out';
 export interface Constraint {
   id: string;

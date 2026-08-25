@@ -29,6 +29,20 @@ export type SoloQuestionRecord = {
   photoUrl?: string;
 };
 
+export function publicSoloDisplayText(kind: Constraint['kind'], displayText: string) {
+  if (kind === 'matching-region') {
+    if (displayText.startsWith('Yes')) return 'Yes';
+    if (displayText.startsWith('No')) return 'No';
+    return 'Null';
+  }
+  if (kind === 'measuring' || kind === 'coastline') {
+    if (displayText.startsWith('Closer')) return 'Closer';
+    if (displayText.startsWith('Farther') || displayText.startsWith('Further')) return 'Further';
+    return 'Null';
+  }
+  return displayText;
+}
+
 export type SoloReveal = {
   reason: 'found' | 'gave-up';
   station: { id: string; name: string; position: Position };

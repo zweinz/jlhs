@@ -124,7 +124,7 @@ function tentacleArea(constraint: Constraint, regions: Record<string, Area>) {
 }
 
 export function constraintArea(constraint: Constraint, regions: Record<string, Area> = {}): Area {
-  if (constraint.kind === 'photo-reference') return frame();
+  if (constraint.kind === 'photo-reference' || constraint.answer === 'null') return frame();
   if (constraint.kind === 'thermometer') {
     return clipRectangleToBisector(
       constraint.origin,

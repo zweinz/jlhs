@@ -1,7 +1,7 @@
 import { SF_BOUNDS } from '../../src/data';
 import { solveHiderQuestion } from '../../src/hider';
 import { QUESTION_DEFINITIONS } from '../../src/questions';
-import { canonicalQuestionKey, cardsForQuestion, photoCamera, SOLO_PHOTO_SUBJECTS, type SoloPhotoKind } from '../../src/solo';
+import { canonicalQuestionKey, cardsForQuestion, photoCamera, publicSoloDisplayText, SOLO_PHOTO_SUBJECTS, type SoloPhotoKind } from '../../src/solo';
 import type { Constraint, Position, QuestionKind } from '../../src/types';
 import { jsonError, readJson, seal, unseal, type PhotoAsset, type SecretSoloSession } from '../_solo-session';
 
@@ -62,7 +62,7 @@ export default async function handler(request: Request) {
       const result = solveHiderQuestion(constraint, session.spot);
       if (!result.answer) return jsonError(result.displayText, 422);
       answer = result.answer;
-      displayText = result.displayText;
+      displayText = publicSoloDisplayText(constraint.kind, result.displayText);
       resolvedRegionId = result.resolvedRegionId;
     }
 

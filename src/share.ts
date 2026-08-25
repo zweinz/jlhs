@@ -16,7 +16,7 @@ const kinds = new Set([
   'intersection',
   'exclusion',
 ]);
-const answers = new Set(['yes', 'no', 'warmer', 'colder', 'closer', 'farther', 'not-within-reach']);
+const answers = new Set(['yes', 'no', 'warmer', 'colder', 'closer', 'farther', 'null', 'not-within-reach']);
 
 function validPosition(position: Position | undefined) {
   return (

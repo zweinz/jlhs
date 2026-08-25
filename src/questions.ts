@@ -53,6 +53,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     notes: [
       ...commonQuestionNotes,
       'The question is “Compared to me, are you closer to or further from ___?”',
+      'The hider answers only closer, further, or null; they do not name their nearest category location.',
       'Locations outside the agreed map are ignored; answer null if none exist in the map.',
       'Use the same mapping app on both teams. The SF POI snapshot applies the shared Google Maps criteria; seekers should clarify any disputed category pin.',
       'Rail stations include light rail, heavy rail, metros, and subways.',
@@ -84,6 +85,7 @@ export const QUESTION_DEFINITIONS: Record<QuestionKind, QuestionDefinition> = {
     notes: [
       ...commonQuestionNotes,
       'The hider answers whether their nearest item in the selected category is the same as the seeker’s nearest item.',
+      'The hider answers only yes, no, or null; they do not name or describe the hider-side matching value.',
       'Locations outside the agreed map are ignored; answer null if none exist in the map.',
       'Use the same mapping app on both teams. The SF POI snapshot applies the shared Google Maps criteria; seekers should clarify any disputed category pin.',
       'For the transit-line variant, the seeker must be on moving transit and the service must actually stop at the hider station; passing express service does not match.',

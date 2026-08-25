@@ -22,10 +22,17 @@ export type HiderAnswerResult = {
   resolvedRegionId?: string;
 };
 
+const yesNoAnswer = (yes: boolean): HiderAnswerResult => ({
+  answer: yes ? 'yes' : 'no',
+  displayText: yes ? 'Yes' : 'No',
+});
+
+const nullAnswer = (): HiderAnswerResult => ({ answer: 'null', displayText: 'Null' });
+
 export function solveHiderQuestion(constraint: Constraint, hider: Position, regions: Record<string, Area> = {}): HiderAnswerResult {
   if (constraint.kind === 'radar' || constraint.kind === 'radius') {
     const yes = distance(hider, constraint.origin) <= (constraint.distanceMiles ?? 1);
-    return { answer: yes ? 'yes' : 'no', displayText: yes ? 'Yes' : 'No' };
+    return yesNoAnswer(yes);
   }
   if (constraint.kind === 'thermometer') {
     const end = constraint.target ?? constraint.origin;
@@ -35,25 +42,25 @@ export function solveHiderQuestion(constraint: Constraint, hider: Position, regi
   if (constraint.kind === 'measuring') {
     if (constraint.category === 'sea-level') {
       const closer = elevationAt(hider) < elevationAt(constraint.origin);
-      return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer (lower elevation)' : 'Farther (higher elevation)' };
+      return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Further' };
     }
     if (constraint.category === 'body-of-water') {
       const closer = nearestWaterDistance(hider) < nearestWaterDistance(constraint.origin);
-      return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Farther' };
+      return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Further' };
     }
     if (constraint.category === 'coastline') {
       const closer = nearestCoastlineDistance(hider) < nearestCoastlineDistance(constraint.origin);
-      return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Farther' };
+      return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Further' };
     }
     const hiderNearest = nearestPoi(constraint.category ?? 'rail-station', hider);
     const seekerNearest = nearestPoi(constraint.category ?? 'rail-station', constraint.origin);
-    if (!hiderNearest || !seekerNearest) return { displayText: 'Null — no matching locations are inside the map' };
+    if (!hiderNearest || !seekerNearest) return nullAnswer();
     const closer = distance(hider, hiderNearest) < distance(constraint.origin, seekerNearest);
-    return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Farther' };
+    return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Further' };
   }
   if (constraint.kind === 'coastline') {
     const closer = nearestCoastlineDistance(hider) < nearestCoastlineDistance(constraint.origin);
-    return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Farther' };
+    return { answer: closer ? 'closer' : 'farther', displayText: closer ? 'Closer' : 'Further' };
   }
   if (constraint.kind === 'matching-region') {
     const category = constraint.category ?? 'museum';
@@ -62,55 +69,46 @@ export function solveHiderQuestion(constraint: Constraint, hider: Position, regi
         distance(hider, station) < distance(hider, best) ? station : best,
       );
       const yes = routesForStation(nearestStation.id).includes(constraint.regionId ?? '');
-      return {
-        answer: yes ? 'yes' : 'no',
-        displayText: yes
-          ? `Yes — ${constraint.regionId} stops at ${nearestStation.name}`
-          : `No — ${constraint.regionId} does not stop at ${nearestStation.name}`,
-      };
+      return yesNoAnswer(yes);
     }
     if (category === 'station-name-length') {
       const seekerStation = nearestPoi('game-valid-station', constraint.origin);
       const hiderStation = nearestPoi('game-valid-station', hider);
-      if (!seekerStation || !hiderStation) return { displayText: 'Null — no station is inside the map' };
+      if (!seekerStation || !hiderStation) return nullAnswer();
       const seekerLength = normalizedStationNameLength(seekerStation.name);
       const hiderLength = normalizedStationNameLength(hiderStation.name);
       const yes = seekerLength === hiderLength;
-      return { answer: yes ? 'yes' : 'no', displayText: yes
-        ? `Yes — both names have ${hiderLength} characters`
-        : `No — seeker: ${seekerLength}; hider: ${hiderLength} characters` };
+      return yesNoAnswer(yes);
     }
     if (category === 'street-path') {
       const seekerStreet = nearestStreet(constraint.origin);
       const hiderStreet = nearestStreet(hider);
       const yes = seekerStreet === hiderStreet;
-      return { answer: yes ? 'yes' : 'no', displayText: yes ? `Yes — ${hiderStreet}` : `No — seeker: ${seekerStreet}; hider: ${hiderStreet}` };
+      return yesNoAnswer(yes);
     }
     if (category === 'supervisor-district') {
       const seekerDistrict = districtAt(constraint.origin)?.properties.name;
       const hiderDistrict = districtAt(hider)?.properties.name;
       const yes = seekerDistrict === hiderDistrict;
-      return { answer: yes ? 'yes' : 'no', displayText: yes ? `Yes — ${hiderDistrict}` : `No — seeker: ${seekerDistrict ?? 'outside'}; hider: ${hiderDistrict ?? 'outside'}` };
+      return yesNoAnswer(yes);
     }
     if (category === 'landmass') {
       const seekerLandmass = landmassAt(constraint.origin)?.properties.name;
       const hiderLandmass = landmassAt(hider)?.properties.name;
       const yes = seekerLandmass === hiderLandmass;
-      return { answer: yes ? 'yes' : 'no', displayText: yes ? `Yes — ${hiderLandmass}` : `No — seeker: ${seekerLandmass ?? 'outside'}; hider: ${hiderLandmass ?? 'outside'}` };
+      return yesNoAnswer(yes);
     }
     if (category === 'zip-code') {
       const seekerZip = zipCodeAt(constraint.origin)?.properties.name;
       const hiderZip = zipCodeAt(hider)?.properties.name;
       const yes = seekerZip === hiderZip;
-      return { answer: yes ? 'yes' : 'no', displayText: yes ? `Yes — ${hiderZip}` : `No — seeker: ${seekerZip ?? 'outside'}; hider: ${hiderZip ?? 'outside'}` };
+      return yesNoAnswer(yes);
     }
     const seekerNearest = nearestPoi(category, constraint.origin);
     const hiderNearest = nearestPoi(category, hider);
-    if (!seekerNearest || !hiderNearest) return { displayText: 'Null — no matching locations are inside the map' };
+    if (!seekerNearest || !hiderNearest) return nullAnswer();
     const yes = seekerNearest.id === hiderNearest.id;
-    return { answer: yes ? 'yes' : 'no', displayText: yes
-      ? `Yes — ${hiderNearest.name}`
-      : `No — seeker: ${seekerNearest.name}; hider: ${hiderNearest.name}` };
+    return yesNoAnswer(yes);
   }
   if (constraint.kind === 'tentacle') {
     const category = constraint.category ?? 'museum';

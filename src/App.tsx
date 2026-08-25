@@ -39,6 +39,7 @@ import {
 import { decodeState, encodeState } from './share';
 import {
   defaultSfDateTime,
+  publicSoloDisplayText,
   sfLocalDateTimeToIso,
   SOLO_PHOTO_SUBJECTS,
   soloStateForNewGame,
@@ -112,7 +113,14 @@ const SOLO_STORAGE_KEY = 'sf-hiding-area-solo-v1';
 function restoredSolo(): SoloClientSession | undefined {
   try {
     const value = localStorage.getItem(SOLO_STORAGE_KEY);
-    return value ? JSON.parse(value) as SoloClientSession : undefined;
+    if (!value) return undefined;
+    const session = JSON.parse(value) as SoloClientSession;
+    const constraints = new Map(session.boardState.constraints.map((constraint) => [constraint.id, constraint]));
+    session.questions = Object.fromEntries(Object.entries(session.questions).map(([id, record]) => {
+      const constraint = constraints.get(id);
+      return [id, constraint ? { ...record, displayText: publicSoloDisplayText(constraint.kind, record.displayText) } : record];
+    }));
+    return session;
   } catch {
     return undefined;
   }
@@ -249,7 +257,9 @@ function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLink
 
 function answerOptions(kind: QuestionKind) {
   if (kind === 'thermometer') return ['warmer', 'colder'];
-  if (kind === 'measuring' || kind === 'coastline') return ['closer', 'farther'];
+  if (kind === 'measuring') return ['closer', 'farther', 'null'];
+  if (kind === 'coastline') return ['closer', 'farther'];
+  if (kind === 'matching-region') return ['yes', 'no', 'null'];
   if (kind === 'tentacle') return ['yes', 'not-within-reach'];
   return ['yes', 'no'];
 }
@@ -839,7 +849,7 @@ export default function App() {
       patchConstraint(constraint.id, { answer: body.answer, ...(body.resolvedRegionId ? { regionId: body.resolvedRegionId } : {}) });
       const record: SoloQuestionRecord = {
         id: constraint.id,
-        displayText: body.displayText,
+        displayText: publicSoloDisplayText(constraint.kind, body.displayText),
         repetition: body.repetition ?? 1,
         cardsDrawn: body.cardsDrawn ?? 0,
         photoUrl: body.photoUrl,
