@@ -341,6 +341,7 @@ export default function App() {
   const mapNode = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const placeInfoWindowRef = useRef<google.maps.InfoWindow | null>(null);
+  const radarPreviewRef = useRef<{ constraintId: string; circle: google.maps.Circle } | null>(null);
   const drawn = useRef<google.maps.Data | null>(null);
   const [state, setState] = useState<SharedState>(() => initialSolo?.boardState ?? restoredState());
   const [solo, setSolo] = useState<SoloClientSession | undefined>(initialSolo);
@@ -359,6 +360,7 @@ export default function App() {
   const [traceActive, setTraceActive] = useState(false);
   const [traceScreenshot, setTraceScreenshot] = useState(false);
   const [tracePoints, setTracePoints] = useState<Position[]>([]);
+  const [selectedConstraintId, setSelectedConstraintId] = useState<string>();
 
   const partitions = useMemo(
     () => Object.fromEntries(REGION_CATEGORIES.map((category) => [category, partition(category)])),
@@ -406,6 +408,9 @@ export default function App() {
   const traceDistanceMiles = useMemo(
     () => pathDistanceMiles(tracePoints),
     [tracePoints],
+  );
+  const selectedRadar = state.constraints.find(
+    (constraint) => constraint.id === selectedConstraintId && constraint.kind === 'radar',
   );
 
   useEffect(() => {
@@ -549,6 +554,35 @@ export default function App() {
       styles: [],
     });
   }, [status, traceScreenshot]);
+
+  useEffect(() => {
+    radarPreviewRef.current?.circle.setMap(null);
+    radarPreviewRef.current = null;
+    const distanceMiles = selectedRadar?.distanceMiles;
+    const map = mapRef.current;
+    if (!map || status !== 'ready' || traceScreenshot || !selectedRadar || !Number.isFinite(distanceMiles) || !distanceMiles || distanceMiles <= 0) return;
+
+    const circle = new google.maps.Circle({
+      map,
+      center: selectedRadar.origin,
+      radius: distanceMiles * 1609.344,
+      clickable: false,
+      fillColor: '#f59e0b',
+      fillOpacity: 0.07,
+      strokeColor: '#b45309',
+      strokeOpacity: 1,
+      strokeWeight: 4,
+      zIndex: 25,
+    });
+    radarPreviewRef.current = { constraintId: selectedRadar.id, circle };
+    const bounds = circle.getBounds();
+    if (bounds) map.fitBounds(bounds, 48);
+
+    return () => {
+      circle.setMap(null);
+      if (radarPreviewRef.current?.circle === circle) radarPreviewRef.current = null;
+    };
+  }, [selectedRadar?.distanceMiles, selectedRadar?.id, selectedRadar?.origin.lat, selectedRadar?.origin.lng, status, traceScreenshot]);
 
   useEffect(() => {
     if (state.mode !== 'hider' && traceScreenshot) setTraceScreenshot(false);
@@ -769,11 +803,13 @@ export default function App() {
     const category = solo && kind === 'photo-reference' ? 'cardinal-view' : defaultCategory(kind);
     const origin = state.viewport.center;
     const regionId = category ? nearestPoi(category, origin)?.id : undefined;
+    const id = crypto.randomUUID();
+    setSelectedConstraintId(id);
     setState((current) => ({
       ...current,
       constraints: [
         {
-          id: crypto.randomUUID(),
+          id,
           name: QUESTION_DEFINITIONS[kind].label,
           kind,
           enabled: true,
@@ -788,6 +824,13 @@ export default function App() {
         ...current.constraints,
       ],
     }));
+  };
+
+  const selectConstraint = (constraint: Constraint) => {
+    setSelectedConstraintId(constraint.id);
+    if (constraint.kind !== 'radar' || radarPreviewRef.current?.constraintId !== constraint.id) return;
+    const bounds = radarPreviewRef.current.circle.getBounds();
+    if (bounds) mapRef.current?.fitBounds(bounds, 48);
   };
 
   const applyConstraintPosition = (constraint: Constraint, update: Partial<Constraint>, position: Position) => {
@@ -1229,7 +1272,12 @@ export default function App() {
                           ? zipCodeAt(constraint.origin)?.properties.name
                         : sourcePoi?.name;
               return (
-                <article key={constraint.id}>
+                <article
+                  key={constraint.id}
+                  className={constraint.kind === 'radar' && selectedConstraintId === constraint.id ? 'radar-preview-active' : undefined}
+                  onClick={() => selectConstraint(constraint)}
+                  onFocusCapture={() => selectConstraint(constraint)}
+                >
                   <div className="constraint-heading"><input aria-label="Constraint name" value={constraint.name} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { name: event.target.value })} /><label className="enabled"><input type="checkbox" checked={constraint.enabled} onChange={(event) => patchConstraint(constraint.id, { enabled: event.target.checked })} />Enabled</label></div>
                   <p className="question-help">{definition.help}</p>
                   {state.mode === 'hider' && <div className={`answer-result ${state.hiderPosition ? '' : 'waiting'}`}><span>Hider answer</span><strong>{state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}

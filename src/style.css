@@ -181,6 +181,10 @@ article {
   border-radius: .75rem;
   background: #fbfcfd;
 }
+article.radar-preview-active {
+  border-color: #b45309;
+  box-shadow: 0 0 0 2px #f59e0b33;
+}
 .constraint-heading {
   display: grid;
   gap: .5rem;
