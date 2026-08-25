@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import resolveMapLink from '../api/resolve-map-link';
-import { googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFromGoogleMapsUrl } from './mapLinks';
+import { googleMapsLinkForPlace, googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFromGoogleMapsUrl } from './mapLinks';
 
 describe('Google Maps link coordinates', () => {
+  it('builds a copyable exact-place URL without a Places Details request', () => {
+    const url = new URL(googleMapsLinkForPlace('ChIJ-test_place', { lat: 37.77, lng: -122.44 }));
+    expect(url.searchParams.get('api')).toBe('1');
+    expect(url.searchParams.get('query')).toBe('37.77,-122.44');
+    expect(url.searchParams.get('query_place_id')).toBe('ChIJ-test_place');
+  });
   it('parses canonical place URLs', () => {
     expect(
       parseCoordinatesFromGoogleMapsUrl(

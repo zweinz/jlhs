@@ -14,7 +14,7 @@ import {
 } from './data';
 import { hiderAnswer } from './hider';
 import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
-import { googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
+import { googleMapsLinkForPlace, googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
 import { orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS } from './questions';
 import {
   MATCHING_SUBJECTS,
@@ -100,6 +100,43 @@ const initial: SharedState = {
 };
 const partitionColor = (index: number, total: number, offset = 0) =>
   `hsl(${Math.round((index * 360) / Math.max(1, total) + offset) % 360}, 62%, 39%)`;
+
+function showMapLinkCard(
+  infoWindow: google.maps.InfoWindow,
+  map: google.maps.Map,
+  position: Position,
+  url: string,
+  onMessage: (message: string) => void,
+) {
+  const header = document.createElement('strong');
+  header.textContent = 'Selected Google Maps place';
+  const content = document.createElement('div');
+  content.className = 'map-place-card';
+  const description = document.createElement('p');
+  description.textContent = 'Open or copy a link to this exact place.';
+  const actions = document.createElement('div');
+  actions.className = 'map-place-actions';
+  const open = document.createElement('a');
+  open.href = url;
+  open.target = '_blank';
+  open.rel = 'noreferrer';
+  open.textContent = 'Open in Google Maps';
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.textContent = 'Copy link';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      onMessage('Place link copied.');
+    } catch {
+      onMessage('The place link could not be copied.');
+    }
+  });
+  actions.append(open, copy);
+  content.append(description, actions);
+  infoWindow.setOptions({ position, headerContent: header, content, ariaLabel: 'Selected Google Maps place' });
+  infoWindow.open({ map });
+}
 const measuringChoices = selectableSubjects(MEASURING_SUBJECTS);
 const matchingChoices = selectableSubjects(MATCHING_SUBJECTS);
 const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
@@ -303,6 +340,7 @@ function defaultAnswer(kind: QuestionKind): Constraint['answer'] {
 export default function App() {
   const mapNode = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
+  const placeInfoWindowRef = useRef<google.maps.InfoWindow | null>(null);
   const drawn = useRef<google.maps.Data | null>(null);
   const [state, setState] = useState<SharedState>(() => initialSolo?.boardState ?? restoredState());
   const [solo, setSolo] = useState<SoloClientSession | undefined>(initialSolo);
@@ -441,6 +479,7 @@ export default function App() {
           gestureHandling: 'greedy',
         });
         mapRef.current = map;
+        placeInfoWindowRef.current = new google.maps.InfoWindow();
         setStatus('ready');
         map.addListener('idle', () => {
           const center = map?.getCenter();
@@ -460,18 +499,32 @@ export default function App() {
     return () => {
       cancelled = true;
       if (map) google.maps.event.clearInstanceListeners(map);
+      placeInfoWindowRef.current?.close();
+      placeInfoWindowRef.current = null;
       if (mapRef.current === map) mapRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || status !== 'ready' || !traceActive) return;
-    const listener = map.addListener('click', (event: google.maps.MapMouseEvent) => {
+    const infoWindow = placeInfoWindowRef.current;
+    if (!map || !infoWindow || status !== 'ready') return;
+    const listener = map.addListener('click', (event: google.maps.MapMouseEvent | google.maps.IconMouseEvent) => {
       const latLng = event.latLng;
       if (!latLng) return;
-      const next = { lat: latLng.lat(), lng: latLng.lng() };
-      if (insideSanFrancisco(next)) setTracePoints((current) => [...current, next]);
+      const position = { lat: latLng.lat(), lng: latLng.lng() };
+      const placeId = 'placeId' in event ? event.placeId : undefined;
+      if (traceActive) {
+        infoWindow.close();
+        if (insideSanFrancisco(position)) setTracePoints((current) => [...current, position]);
+        return;
+      }
+      if (!placeId) {
+        infoWindow.close();
+        return;
+      }
+      event.stop();
+      showMapLinkCard(infoWindow, map, position, googleMapsLinkForPlace(placeId, position), setMessage);
     });
     return () => listener.remove();
   }, [status, traceActive]);

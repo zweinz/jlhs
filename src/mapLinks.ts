@@ -55,3 +55,9 @@ export async function resolveGoogleMapsLink(value: string): Promise<Position> {
 export function googleMapsLinkForPosition(value: Position) {
   return `https://www.google.com/maps/search/?api=1&query=${value.lat},${value.lng}`;
 }
+
+export function googleMapsLinkForPlace(placeId: string, value: Position) {
+  const url = new URL(googleMapsLinkForPosition(value));
+  url.searchParams.set('query_place_id', placeId);
+  return url.href;
+}

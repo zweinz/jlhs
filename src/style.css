@@ -354,6 +354,11 @@ article {
 .storage-summary dl div { display: grid; gap: .12rem; }
 .storage-summary dt { color: #26384d; font-size: .76rem; font-weight: 800; }
 .storage-summary dd { margin: 0; color: #586573; font-size: .75rem; line-height: 1.4; }
+.map-place-card { min-width: 210px; padding: .1rem 0 .25rem; }
+.map-place-card p { margin: 0 0 .55rem; color: #586573; font-size: .78rem; }
+.map-place-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.map-place-actions a, .map-place-actions button { min-height: 34px; padding: .42rem .65rem; border-radius: .4rem; font-size: .76rem; font-weight: 750; }
+.map-place-actions a { display: inline-flex; align-items: center; background: #eef3f8; color: #173f75; text-decoration: none; }
 .legend-key { display: grid; grid-template-columns: 12px 1fr 12px 1fr; gap: .35rem; align-items: center; font-size: .76rem; }
 .legend-key span { width: 12px; height: 4px; border-radius: 2px; }
 .legend-key .rail { background: #7c3aed; }
