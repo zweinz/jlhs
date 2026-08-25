@@ -15,7 +15,7 @@ export const PARTITION_CATEGORIES = [
   'farmers-market',
 ] as const;
 
-export const TENTACLE_CATEGORIES = ['museum', 'library', 'movie-theater', 'hospital', 'aquarium', 'transit-route'] as const;
+export const TENTACLE_CATEGORIES = ['museum', 'library', 'movie-theater', 'hospital'] as const;
 
 export type PartitionCategory = (typeof PARTITION_CATEGORIES)[number];
 export type PoiCategory =

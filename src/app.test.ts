@@ -7,7 +7,7 @@ import { combineConstraints, constraintArea, excludedArea, partition, partitionL
 import { hiderAnswer, solveHiderQuestion } from './hider';
 import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, RULEBOOK_DISTANCE_CHOICES } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
-import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
+import { districtAt, elevationAt, landmassAt, nearestStreet, nearestStreetOrientation, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import { decodeState, encodeState, validateState } from './share';
 import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, routesForStation, shouldDisplayStationZone, stationIdsMatchingTransitQuestions, stationRouteProvenance, transitRouteLabel, transitRoutes, validStations } from './transit';
@@ -102,7 +102,7 @@ describe('SF rulebook audit', () => {
   it('catalogs the complete investigation-book inventories and SF decisions', () => {
     expect(MATCHING_SUBJECTS).toHaveLength(20);
     expect(MEASURING_SUBJECTS).toHaveLength(20);
-    expect(PHOTO_SUBJECTS).toHaveLength(18);
+    expect(PHOTO_SUBJECTS).toHaveLength(14);
     expect([...MATCHING_SUBJECTS, ...MEASURING_SUBJECTS, ...PHOTO_SUBJECTS].some((subject) => /homebrew/i.test(subject.label))).toBe(false);
     expect(MATCHING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('out-of-play');
     expect(MEASURING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('in-play');
@@ -182,6 +182,10 @@ describe('missing measuring and matching geometry', () => {
       expect(turf.area(constraintArea({ ...base('matching-region'), category }, stationRegions))).toBeGreaterThan(0);
     }
     expect(nearestStreet(base('radar').origin)).toBeTruthy();
+    const orientation = nearestStreetOrientation(base('radar').origin)!;
+    expect(orientation.name).toBe(nearestStreet(base('radar').origin));
+    expect(orientation.bearing).toBeGreaterThanOrEqual(0);
+    expect(orientation.bearing).toBeLessThan(180);
     expect(districtAt(base('radar').origin)?.properties.name).toMatch(/District/);
     expect(landmassAt(base('radar').origin)?.properties.name).toBeTruthy();
   });
@@ -250,7 +254,27 @@ it('models named and not-within-reach tentacle answers', () => {
   expect(turf.area(outside)).toBeGreaterThan(turf.area(named));
 });
 
-it('keeps transit-line matching station-based and models large-game metro tentacles', () => {
+it('partitions named tentacles against only seeker-reachable sources', () => {
+  const main = pois.find((poi) => poi.category === 'library' && poi.name === 'Main Branch')!;
+  const eureka = pois.find((poi) => poi.category === 'library' && poi.name === 'Eureka Valley')!;
+  const hider = { lat: 37.76799099984212, lng: -122.4244987392229 };
+  const constraint = {
+    ...base('tentacle'), origin: main, category: 'library', regionId: main.id,
+    distanceMiles: 1, answer: 'yes' as const,
+  };
+  expect(turf.distance([main.lng, main.lat], [eureka.lng, eureka.lat], { units: 'miles' })).toBeGreaterThan(1);
+  expect(turf.distance([hider.lng, hider.lat], [eureka.lng, eureka.lat], { units: 'miles' }))
+    .toBeLessThan(turf.distance([hider.lng, hider.lat], [main.lng, main.lat], { units: 'miles' }));
+  expect(solveHiderQuestion(constraint, hider).resolvedRegionId).toBe(main.id);
+  expect(turf.booleanPointInPolygon([hider.lng, hider.lat], constraintArea(constraint, partition('library')))).toBe(true);
+});
+
+it('states the reachable-source Tentacle rule explicitly', () => {
+  expect(QUESTION_DEFINITIONS.tentacle.notes.join(' ')).toMatch(/only category items within the stated distance of the seeker/i);
+  expect(QUESTION_DEFINITIONS.tentacle.notes.join(' ')).toMatch(/out-of-reach item does not compete/i);
+});
+
+it('keeps transit-line matching station-based and models transit tentacle geometry independently', () => {
   const jStation = validStations.find((station) => eligibleStationIds({}, { J: 'in' }).includes(station.id))!;
   const nearMatching = constraintArea({ ...base('matching-region'), category: 'transit-route', regionId: 'J', distanceMiles: 0.05 });
   const farMatching = constraintArea({ ...base('matching-region'), category: 'transit-route', regionId: 'J', distanceMiles: 5 });
@@ -373,7 +397,7 @@ it('keeps POI partition layers mutually exclusive and allows all of them to be o
 const state: SharedState = {
   version: 2,
   constraints: [base('radar')],
-  layers: { museum: true, 'station-zones': true },
+  layers: { museum: true, 'station-zones': true, 'sticky-map': true },
   viewport: { center: { lat: 37.77, lng: -122.44 }, zoom: 12 },
   mode: 'seeker',
   stationZoneMiles: 0.25,
@@ -387,7 +411,10 @@ const state: SharedState = {
 it('round trips versioned shared state', () => expect(decodeState(encodeState(state))).toEqual(state));
 it('defaults old version 2 shares to green allowed-area shading', () => {
   const { areaDisplayMode: _areaDisplayMode, transitScope: _transitScope, ...oldState } = state;
-  expect(validateState(oldState)).toMatchObject({ areaDisplayMode: 'allowed-green', transitScope: 'all' });
+  expect(validateState(oldState)).toMatchObject({ areaDisplayMode: 'allowed-green', transitScope: 'all', layers: { 'sticky-map': true } });
+});
+it('defaults the sticky map on and removes the retired coastline overlay', () => {
+  expect(validateState({ ...state, layers: { coastline: true } }).layers).toEqual({ 'sticky-map': true });
 });
 it('migrates a valid version 1 share payload', () => {
   const legacy = { version: 1, constraints: [base('radius')], layers: { museum: true }, viewport: state.viewport };

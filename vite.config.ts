@@ -8,9 +8,11 @@ async function apiHandler(pathname: string): Promise<EdgeHandler | undefined> {
   if (pathname === '/api/resolve-map-link') return (await import('./api/resolve-map-link')).default;
   if (pathname === '/api/solo/start') return (await import('./api/solo/start')).default;
   if (pathname === '/api/solo/question') return (await import('./api/solo/question')).default;
+  if (pathname === '/api/solo/card-event') return (await import('./api/solo/card-event')).default;
   if (pathname === '/api/solo/check-location') return (await import('./api/solo/check-location')).default;
   if (pathname === '/api/solo/reveal') return (await import('./api/solo/reveal')).default;
   if (pathname === '/api/solo/photo') return (await import('./api/solo/photo')).default;
+  if (pathname === '/api/solo/street-orientation') return (await import('./api/solo/street-orientation')).default;
   return undefined;
 }
 
@@ -62,7 +64,7 @@ function localEdgeApi(): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  ['GOOGLE_MAPS_SERVER_API_KEY', 'SOLO_SESSION_SECRET', 'SOLO_SESSION_SECRET_PREVIOUS'].forEach((name) => {
+  ['GOOGLE_MAPS_SERVER_API_KEY', 'GEMINI_API_KEY', 'SOLO_SESSION_SECRET', 'SOLO_SESSION_SECRET_PREVIOUS'].forEach((name) => {
     if (env[name] && !process.env[name]) process.env[name] = env[name];
   });
   return {

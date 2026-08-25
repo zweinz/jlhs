@@ -81,10 +81,6 @@ export const PHOTO_SUBJECTS: RulebookSubject[] = [
   mediumPhoto('grocery-store-aisle', 'Grocery-store aisle', 'No zoom. Stand at the end of the aisle and shoot directly down it.', 'SF counts Google categories Grocery Store, Supermarket, Convenience Store, Liquor Store, or Wine Store with more than five reviews.'),
   mediumPhoto('place-of-worship', 'Place of worship', 'Include a 5×5-foot section with three distinct, location-matchable elements.'),
   mediumPhoto('train-platform', 'Train platform', 'Include a 5×5-foot section with three distinct, location-matchable elements.'),
-  excluded('half-mile-of-streets-traced', '½ mile of streets traced', 'Not added to the SF small-game deck.'),
-  excluded('tallest-mountain-visible-from-station', 'Tallest mountain visible from station', 'Not added to the SF small-game deck.'),
-  excluded('biggest-body-of-water-in-your-zone', 'Biggest body of water in your zone', 'Not added to the SF small-game deck.'),
-  excluded('five-buildings', 'Five buildings', 'Not added to the SF small-game deck.'),
 ];
 
 export const selectableSubjects = (subjects: RulebookSubject[]) =>

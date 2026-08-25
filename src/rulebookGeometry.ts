@@ -67,6 +67,17 @@ export function nearestStreet(position: Position) {
   return streetData.names[nameIndex];
 }
 
+export function nearestStreetOrientation(position: Position) {
+  const index = gridIndex(position, streetData);
+  const name = streetData.names[streetData.values[index]];
+  const bearing = streetData.bearings[index];
+  if (name === 'Unknown' || bearing === null) return undefined;
+  return {
+    name,
+    bearing,
+  };
+}
+
 export function streetArea(name: string) {
   const nameIndex = streetData.names.indexOf(name);
   if (nameIndex < 0) return empty();

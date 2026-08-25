@@ -1,6 +1,7 @@
 import * as turf from '@turf/turf';
-import { QUESTION_DEFINITIONS } from './questions';
+import { QUESTION_DEFINITIONS, RULEBOOK_DISTANCE_CHOICES } from './questions';
 import type { Constraint, Position, SharedState } from './types';
+import type { CardId, CardKind } from './cards';
 
 export type SoloPhase = 'seeking' | 'end-game' | 'found' | 'gave-up';
 
@@ -18,66 +19,29 @@ export type SoloPhotoKind =
   | 'park'
   | 'grocery-store-aisle'
   | 'place-of-worship'
-  | 'train-platform'
-  | 'half-mile-of-streets-traced'
-  | 'tallest-mountain-visible-from-station'
-  | 'biggest-body-of-water-in-your-zone'
-  | 'five-buildings';
+  | 'train-platform';
 
-export type LegacySoloPhotoKind =
-  | 'cardinal-view'
-  | 'toward-station'
-  | 'away-from-station'
-  | 'sky-above'
-  | 'ground-and-path'
-  | 'wide-streetscape';
-
-export type AnySoloPhotoKind = SoloPhotoKind | LegacySoloPhotoKind;
+export type AnySoloPhotoKind = SoloPhotoKind;
 
 export const SOLO_PHOTO_SUBJECTS: Array<{ id: SoloPhotoKind; label: string; help: string }> = [
-  { id: 'a-tree', label: 'A tree', help: 'Approximate: a deterministic streetscape view at the hiding location; the image may not contain a tree.' },
+  { id: 'a-tree', label: 'A tree', help: 'Best effort: aims outdoor Street View into a mapped park in the hiding zone when possible, otherwise uses the hiding panorama.' },
   { id: 'the-sky', label: 'The sky', help: 'Supported: a deterministic view aimed straight up at the hiding location.' },
   { id: 'you', label: 'You', help: 'Easter egg: the AI supplies its own suspiciously anonymous selfie. Free to ask; no cards are drawn or kept.' },
   { id: 'widest-street', label: 'Widest street', help: 'Approximate: a wide deterministic streetscape at the hiding location; Street View cannot prove it is the zone’s widest.' },
   { id: 'tallest-structure-in-your-sightline', label: 'Tallest structure in your sightline', help: 'Approximate: an upward-framed deterministic view at the hiding location.' },
   { id: 'any-building-visible-from-station', label: 'Any building visible from station', help: 'Rulebook-card approximation from the station panorama, framed upward to include a nearby building.' },
   { id: 'tallest-building-visible-from-station', label: 'Tallest building visible from station', help: 'Medium-game rulebook-card approximation from the station panorama, using a different view from the any-building card.' },
-  { id: 'trace-nearest-street-path', label: 'Trace nearest street/path', help: 'Unavailable: an unmodified Street View image cannot provide the rulebook’s map trace, so the answer is “I cannot answer.”' },
-  { id: 'two-buildings', label: 'Two buildings', help: 'Medium-game rulebook-card approximation using a wide streetscape from the committed hiding panorama.' },
-  { id: 'restaurant-interior', label: 'Restaurant interior', help: 'Unavailable: Solo uses outdoor Street View only, so the answer is “I cannot answer.”' },
-  { id: 'park', label: 'Park', help: 'Unavailable unless a rule-compliant park photo can be guaranteed; current outdoor metadata cannot verify the subject.' },
-  { id: 'grocery-store-aisle', label: 'Grocery store aisle', help: 'Unavailable: Solo uses outdoor Street View only, so the answer is “I cannot answer.”' },
-  { id: 'place-of-worship', label: 'Place of worship', help: 'Unavailable unless the subject can be verified; Street View metadata alone cannot guarantee one is pictured.' },
-  { id: 'train-platform', label: 'Train platform', help: 'Unavailable: a station entrance panorama is not treated as a train-platform photo.' },
-  { id: 'half-mile-of-streets-traced', label: '½ mile of streets traced', help: 'Unavailable: an unmodified Street View image cannot provide the rulebook’s map trace.' },
-  { id: 'tallest-mountain-visible-from-station', label: 'Tallest mountain visible from station', help: 'Unavailable: Street View metadata cannot determine which mountain is visible or tallest.' },
-  { id: 'biggest-body-of-water-in-your-zone', label: 'Biggest body of water in your zone', help: 'Unavailable: Street View metadata cannot guarantee a qualifying body of water is visible.' },
-  { id: 'five-buildings', label: 'Five buildings', help: 'Approximate: a wide deterministic streetscape at the hiding location; the image may contain fewer than five buildings.' },
+  { id: 'trace-nearest-street-path', label: 'Trace nearest street/path', help: 'Approximate: shows the precomputed orientation of the nearest named DataSF street, with north up. It does not trace intersections or cover every park and unnamed path.' },
+  { id: 'two-buildings', label: 'Two buildings', help: 'Medium-game rulebook-card approximation using a wide streetscape from the current hiding panorama.' },
+  { id: 'restaurant-interior', label: 'Restaurant interior', help: 'Best effort: searches the hiding zone for a restaurant and allows indoor Street View, falling back only when no usable scene exists.' },
+  { id: 'park', label: 'Park', help: 'Supported when the hiding zone contains a mapped qualifying park with nearby outdoor Street View.' },
+  { id: 'grocery-store-aisle', label: 'Grocery store aisle', help: 'Best effort: searches qualifying stores in the hiding zone and allows indoor Street View; the aisle framing cannot be guaranteed.' },
+  { id: 'place-of-worship', label: 'Place of worship', help: 'Best effort: searches qualifying worship sites in the hiding zone and aims available Street View at the place.' },
+  { id: 'train-platform', label: 'Train platform', help: 'Best effort: targets a mapped rail station in the hiding zone and allows indoor Street View for a platform or station scene.' },
 ];
 
-export const LEGACY_SOLO_PHOTO_KINDS: LegacySoloPhotoKind[] = [
-  'cardinal-view',
-  'toward-station',
-  'away-from-station',
-  'sky-above',
-  'ground-and-path',
-  'wide-streetscape',
-];
-
-const legacyPhotoMigration: Record<LegacySoloPhotoKind, SoloPhotoKind> = {
-  'cardinal-view': 'a-tree',
-  'toward-station': 'any-building-visible-from-station',
-  'away-from-station': 'tallest-building-visible-from-station',
-  'sky-above': 'the-sky',
-  'ground-and-path': 'widest-street',
-  'wide-streetscape': 'two-buildings',
-};
-
-export function migrateSoloPhotoKind(value?: string) {
-  return value && LEGACY_SOLO_PHOTO_KINDS.includes(value as LegacySoloPhotoKind)
-    ? legacyPhotoMigration[value as LegacySoloPhotoKind]
-    : value;
-}
+export const soloPhotoOptionLabel = (subject: (typeof SOLO_PHOTO_SUBJECTS)[number]) =>
+  subject.help.startsWith('Unavailable') ? `${subject.label} (unavailable)` : subject.label;
 
 export type SoloQuestionRecord = {
   id: string;
@@ -86,6 +50,87 @@ export type SoloQuestionRecord = {
   cardsDrawn: number;
   cardsKept: number;
   photoUrl?: string;
+  outcome?: 'answered' | 'vetoed' | 'randomized';
+  playedCards?: string[];
+  randomizedFrom?: string;
+  randomizedTo?: string;
+};
+
+export function answeredSoloConstraint(original: Constraint, replacement: Constraint | undefined, answer: Constraint['answer'], resolvedRegionId?: string) {
+  return {
+    ...(replacement ?? original),
+    id: original.id,
+    answer,
+    answerSet: true,
+    enabled: true,
+    ...(resolvedRegionId ? { regionId: resolvedRegionId } : {}),
+  } satisfies Constraint;
+}
+
+export function vetoedSoloConstraint(original: Constraint) {
+  return { ...original, enabled: false } satisfies Constraint;
+}
+
+export type SoloPublicEffect = {
+  id: string;
+  cardId: CardId;
+  name: string;
+  description: string;
+  status: 'pending' | 'active' | 'monitoring' | 'waiting' | 'failed';
+  blocksQuestions: boolean;
+  blocksTransit: boolean;
+  failureBonusMinutes?: number;
+  citationUrl?: string;
+  placeName?: string;
+  mazeSvg?: string;
+  hangmanPattern?: string;
+  hangmanWrong?: string[];
+  failureReported?: boolean;
+  expiresAt?: string;
+  currentRestriction?: string;
+  disabledQuestionKeys?: string[];
+  disabledCategory?: string;
+  canClear?: boolean;
+  canCompleteTask?: boolean;
+  canReportFailure?: boolean;
+  castingInstruction?: string;
+  completionInstruction: string;
+  failureInstruction?: string;
+  imageUrl?: string;
+  detail?: string;
+  lockedUntil?: string;
+};
+
+export type SoloPublicCardState = {
+  handCount: number;
+  maxHandSize: number;
+  handCards?: Array<{
+    id: CardId;
+    kind: CardKind;
+    name: string;
+    description: string;
+    count: number;
+  }>;
+  deckCount: number;
+  discardCount: number;
+  usedCount: number;
+  activeCurses: SoloPublicEffect[];
+  playHistory: string[];
+  moves: Array<{ at: string; oldStation: { id: string; name: string; position: Position } }>;
+  positionRevision: number;
+  questionBlocked: boolean;
+  nextQuestionFree: boolean;
+  nextRewardExtraDraw: number;
+  strategy: {
+    calls: number;
+    limit: number;
+    mapsCalls: number;
+    mapsLimit: number;
+    fallback: boolean;
+    fallbackReason?: 'call-limit' | 'budget';
+    available: boolean;
+  };
+  bonusMinutes: number;
 };
 
 export function publicSoloDisplayText(kind: Constraint['kind'], displayText: string) {
@@ -103,12 +148,11 @@ export function publicSoloDisplayText(kind: Constraint['kind'], displayText: str
 }
 
 export type SoloReveal = {
-  reason: 'found' | 'gave-up';
+  reason: 'found' | 'gave-up' | 'peek';
   station: { id: string; name: string; position: Position };
   spot: Position;
   panorama: { id: string; date?: string; imageUrl: string };
   stationPanorama?: { id: string; date?: string };
-  commitmentVersion?: 1 | 2;
   route: {
     durationSeconds: number;
     distanceMeters: number;
@@ -117,31 +161,49 @@ export type SoloReveal = {
     summary: string[];
   };
   sessionId: string;
-  salt: string;
-  commitment: string;
-  commitmentValid?: boolean;
+  movementHistory?: Array<{ at: string; reason: string; station: { name: string; position: Position }; position: Position; previousStationName?: string }>;
+  cards?: { played: string[]; discarded: string[]; remainingHand: string[] };
+  elapsedHidingSeconds?: number;
+  timeBonusMinutes?: number;
 };
 
 export type SoloClientSession = {
   token: string;
-  commitment: string;
   cardsDrawn: number;
   cardsKept: number;
+  questionUses: Record<string, number>;
+  hidingTimeMinutes: number;
+  stationZoneMiles: number;
   phase: SoloPhase;
   departureTime: string;
   questions: Record<string, SoloQuestionRecord>;
   humanState: SharedState;
   boardState: SharedState;
   reveal?: SoloReveal;
+  cardState?: SoloPublicCardState;
 };
 
-export type SoloStartResponse = Pick<SoloClientSession, 'token' | 'commitment' | 'cardsDrawn' | 'cardsKept' | 'phase' | 'departureTime'>;
+export type SoloStartResponse = Pick<SoloClientSession, 'token' | 'cardsDrawn' | 'cardsKept' | 'questionUses' | 'hidingTimeMinutes' | 'stationZoneMiles' | 'phase' | 'departureTime' | 'cardState'>;
 
 export function canonicalQuestionKey(constraint: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>) {
   if (constraint.kind === 'radar' || constraint.kind === 'thermometer') {
-    return `${constraint.kind}:${Number(constraint.distanceMiles ?? 0).toFixed(3)}`;
+    const distance = Number(constraint.distanceMiles);
+    const prescribed = RULEBOOK_DISTANCE_CHOICES[constraint.kind].some((candidate) => candidate === distance);
+    return `${constraint.kind}:${prescribed ? distance.toFixed(3) : 'custom'}`;
   }
   return `${constraint.kind}:${constraint.category ?? 'default'}`;
+}
+
+export function normalizeQuestionUses(questionUses: Record<string, number>) {
+  return Object.entries(questionUses).reduce<Record<string, number>>((normalized, [key, uses]) => {
+    const [kind, value] = key.split(':', 2);
+    const distance = Number(value);
+    const normalizedKey = (kind === 'radar' || kind === 'thermometer') && value !== 'custom' && Number.isFinite(distance)
+      ? canonicalQuestionKey({ kind, distanceMiles: distance })
+      : key;
+    normalized[normalizedKey] = (normalized[normalizedKey] ?? 0) + uses;
+    return normalized;
+  }, {});
 }
 
 export function questionUseCounts(constraints: Array<Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>>) {
@@ -150,6 +212,10 @@ export function questionUseCounts(constraints: Array<Pick<Constraint, 'kind' | '
     counts[key] = (counts[key] ?? 0) + 1;
     return counts;
   }, {});
+}
+
+export function askedChoiceLabel(label: string, uses: number) {
+  return uses > 0 ? `${label} · asked ${uses}x` : label;
 }
 
 export function cardsForQuestion(constraint: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>, priorUses: number) {
@@ -170,8 +236,8 @@ export function keptCardsFromQuestionUses(questionUses: Record<string, number>) 
   }, 0);
 }
 
-export function stationDifficulty(durationSeconds: number, nearbyStations: number) {
-  const durationScore = Math.max(0, Math.min(1, durationSeconds / 1800));
+export function stationDifficulty(durationSeconds: number, nearbyStations: number, hidingTimeSeconds = 1800) {
+  const durationScore = Math.max(0, Math.min(1, durationSeconds / hidingTimeSeconds));
   const sparseScore = 1 - Math.max(0, Math.min(1, nearbyStations / 10));
   return 0.65 * durationScore + 0.35 * sparseScore;
 }
@@ -199,29 +265,29 @@ export type SoloPhotoPlan = {
   pitch: number;
   fov: number;
   unavailableReason?: string;
+  rewardEligible?: boolean;
   staticAssetUrl?: string;
+  generatedAsset?: 'street-orientation';
 };
 
 const normalizedHeading = (heading: number) => ((heading % 360) + 360) % 360;
 
 export function soloPhotoPlan(
   kind: AnySoloPhotoKind,
-  spot: Position,
-  station: Position,
-  cardinalDirection: Constraint['direction'] = 'north',
+  _spot: Position,
+  _station: Position,
+  _cardinalDirection: Constraint['direction'] = 'north',
   seededHeading = 0,
 ): SoloPhotoPlan {
-  const toward = bearingDegrees(spot, station);
-  const cardinal = { north: 0, east: 90, south: 180, west: 270 }[cardinalDirection ?? 'north'];
   const atSpot = (displayText: string, heading: number, pitch: number, fov: number): SoloPhotoPlan => ({
     source: 'spot', displayText, heading: normalizedHeading(heading), pitch, fov,
   });
   const atStation = (displayText: string, heading: number, pitch: number, fov: number): SoloPhotoPlan => ({
     source: 'station', displayText, heading: normalizedHeading(heading), pitch, fov,
   });
-  const unavailable = (reason: string): SoloPhotoPlan => ({
+  const unavailable = (reason: string, rewardEligible = false): SoloPhotoPlan => ({
     source: 'spot', displayText: `I cannot answer: ${reason}`, heading: normalizedHeading(seededHeading), pitch: 0, fov: 90,
-    unavailableReason: reason,
+    unavailableReason: reason, rewardEligible,
   });
 
   if (kind === 'any-building-visible-from-station') {
@@ -245,9 +311,6 @@ export function soloPhotoPlan(
   if (kind === 'two-buildings') {
     return atSpot('Two buildings · Street View approximation at the hiding location', seededHeading + 270, 0, 120);
   }
-  if (kind === 'five-buildings') {
-    return atSpot('Five buildings · Street View approximation at the hiding location', seededHeading + 225, 0, 120);
-  }
   if (kind === 'you') return {
     source: 'spot',
     displayText: 'You · AI hider selfie (identity successfully concealed)',
@@ -256,23 +319,16 @@ export function soloPhotoPlan(
     fov: 90,
     staticAssetUrl: '/solo-selfie.svg',
   };
-  if (kind === 'trace-nearest-street-path') return unavailable('an unmodified Street View image cannot provide the required map trace');
-  if (kind === 'restaurant-interior') return unavailable('Solo uses outdoor Street View and cannot show a restaurant interior');
-  if (kind === 'park') return unavailable('the available metadata cannot verify a rule-compliant park photo');
-  if (kind === 'grocery-store-aisle') return unavailable('Solo uses outdoor Street View and cannot show a grocery-store aisle');
-  if (kind === 'place-of-worship') return unavailable('the available metadata cannot verify a place of worship in the image');
-  if (kind === 'train-platform') return unavailable('the station entrance panorama is not a verified train-platform photo');
-  if (kind === 'half-mile-of-streets-traced') return unavailable('an unmodified Street View image cannot provide the required half-mile map trace');
-  if (kind === 'tallest-mountain-visible-from-station') return unavailable('Street View metadata cannot identify the tallest visible mountain');
-  if (kind === 'biggest-body-of-water-in-your-zone') return unavailable('Street View metadata cannot verify the zone’s biggest body of water');
-
-  // Preserve deterministic answers for already-created drafts from the earlier house-rule inventory.
-  if (kind === 'cardinal-view') return atSpot('Cardinal view from the AI’s committed hiding spot', cardinal, 0, 90);
-  if (kind === 'toward-station') return atSpot('View toward the hiding station from the AI’s committed hiding spot', toward, 0, 70);
-  if (kind === 'away-from-station') return atSpot('View away from the hiding station from the AI’s committed hiding spot', toward + 180, 0, 110);
-  if (kind === 'sky-above') return atSpot('Sky above the AI’s committed hiding spot', seededHeading, 90, 90);
-  if (kind === 'ground-and-path') return atSpot('Ground and path at the AI’s committed hiding spot', toward, -45, 90);
-  return atSpot('Wide streetscape from the AI’s committed hiding spot', seededHeading, 0, 120);
+  if (kind === 'trace-nearest-street-path') return {
+    ...atSpot('Trace nearest street/path · approximate nearest named-street orientation; north is up', seededHeading, 0, 90),
+    generatedAsset: 'street-orientation',
+  };
+  if (kind === 'restaurant-interior') return unavailable('no restaurant with usable Street View was found in this hiding zone');
+  if (kind === 'park') return unavailable('no qualifying mapped park with usable outdoor Street View was found in this hiding zone');
+  if (kind === 'grocery-store-aisle') return unavailable('no qualifying grocery store with usable Street View was found in this hiding zone');
+  if (kind === 'place-of-worship') return unavailable('no qualifying place of worship with usable Street View was found in this hiding zone');
+  if (kind === 'train-platform') return unavailable('no mapped rail station with usable Street View was found in this hiding zone');
+  return unavailable('Unsupported photo card');
 }
 
 function sfOffsetMinutes(instant: Date) {
@@ -311,8 +367,8 @@ export function soloStateForNewGame(base: SharedState): SharedState {
     ...base,
     mode: 'seeker',
     constraints: [],
-    stationZoneMiles: 0.25,
-    transitScope: 'all',
+    stationZoneMiles: base.stationZoneMiles,
+    transitScope: base.transitScope,
     stationStatuses: {},
     routeStatuses: {},
     hiderPosition: undefined,
@@ -329,25 +385,4 @@ export function soloRevealMapFeatures(reveal: Pick<SoloReveal, 'station' | 'spot
     ),
     turf.point([reveal.spot.lng, reveal.spot.lat], { kind: 'solo-reveal', areaName: 'AI hiding spot' }),
   ];
-}
-
-export async function verifyRevealCommitment(reveal: SoloReveal) {
-  const payload = {
-    sessionId: reveal.sessionId,
-    departureTime: reveal.route.departureTime,
-    station: reveal.station,
-    spot: reveal.spot,
-    panorama: { id: reveal.panorama.id, ...(reveal.panorama.date ? { date: reveal.panorama.date } : {}) },
-    route: reveal.route,
-    salt: reveal.salt,
-    ...(reveal.commitmentVersion === 2 ? {
-      commitmentVersion: 2,
-      stationPanorama: reveal.stationPanorama,
-    } : {}),
-  };
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload))));
-  let binary = '';
-  digest.forEach((byte) => { binary += String.fromCharCode(byte); });
-  const commitment = btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-  return commitment === reveal.commitment;
 }

@@ -1,21 +1,23 @@
-import type { Position } from '../src/types';
+import type { Position, TransitScope } from '../src/types';
 import type { SoloPhase } from '../src/solo';
+import { normalizeQuestionUses } from '../src/solo';
+import type { CardId, CardInstanceId, DeckState } from '../src/cards';
 
 declare const process: { env: Record<string, string | undefined> };
 
 export type SecretSoloSession = {
   kind: 'solo-session';
-  version: 1;
+  version: 2;
   sessionId: string;
   createdAt: string;
   expiresAt: string;
   departureTime: string;
-  salt: string;
-  commitment: string;
-  commitmentVersion?: 1 | 2;
+  transitScope: TransitScope;
+  hidingTimeMinutes: number;
+  stationZoneMiles: number;
   phase: SoloPhase;
   cardsDrawn: number;
-  cardsKept?: number;
+  cardsKept: number;
   questionUses: Record<string, number>;
   wideHeading: number;
   station: { id: string; name: string; position: Position };
@@ -29,6 +31,76 @@ export type SecretSoloSession = {
     arrivalTime: string;
     summary: string[];
   };
+  deck: DeckState;
+  questionNumber: number;
+  lastCurseQuestionNumber?: number;
+  blockedQuestionKeys?: string[];
+  activeEffects?: SoloEffectState[];
+  bonusMinutes?: number;
+  movementHistory?: Array<{
+    at: string;
+    reason: 'initial' | 'move' | 'distant-cuisine';
+    station: { id: string; name: string; position: Position };
+    position: Position;
+    previousStationName?: string;
+  }>;
+  publicMoves?: Array<{
+    at: string;
+    oldStation: { id: string; name: string; position: Position };
+  }>;
+  positionRevision?: number;
+  recentDecisions?: string[];
+  recentQuestions?: Array<{ name: string; answer: string; kind: string }>;
+  gemini?: GeminiUsageState;
+  lastSeekerPosition?: Position;
+  lastSeekerQuestionNumber?: number;
+  lastTransitRoute?: string;
+  overflowingQuestionsRemaining?: number;
+  freeNextQuestion?: boolean;
+  spottyMemoryCategory?: string;
+  groundedPlaces?: Array<{ purpose: 'distant-cuisine' | 'mediocre-travel-agent'; center: Position; name: string; position: Position; citationUrl?: string; country?: string }>;
+};
+
+export type SoloEffectState = {
+  id: string;
+  cardId: CardId;
+  cardInstance: CardInstanceId;
+  name: string;
+  description: string;
+  status: 'pending' | 'active' | 'monitoring' | 'waiting' | 'failed';
+  startedQuestion: number;
+  blocksQuestions: boolean;
+  blocksTransit: boolean;
+  failureBonusMinutes?: number;
+  citationUrl?: string;
+  placeName?: string;
+  proposedPosition?: Position;
+  proposedPanorama?: { id: string; date?: string };
+  mazeSvg?: string;
+  hangmanWord?: string;
+  hangmanWrong?: string[];
+  hangmanGuesses?: string[];
+  hangmanLosses?: number;
+  failureReported?: boolean;
+  expiresAt?: string;
+  lockedUntil?: string;
+  castingInstruction?: string;
+  completionInstruction: string;
+  failureInstruction?: string;
+  imageUrl?: string;
+  detail?: string;
+};
+
+export type GeminiUsageState = {
+  calls: number;
+  mapsCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  spentMicros: number;
+  reservedMapsMicros: number;
+  recentCallTimes: string[];
+  fallback: boolean;
+  fallbackReason?: 'call-limit' | 'budget';
 };
 
 export type PhotoAsset = {
@@ -40,6 +112,15 @@ export type PhotoAsset = {
   pitch: number;
   fov: number;
 };
+
+export type StreetOrientationAsset = {
+  kind: 'solo-street-orientation';
+  version: 1;
+  expiresAt: string;
+  bearing: number;
+};
+
+type SealedAsset = SecretSoloSession | PhotoAsset | StreetOrientationAsset;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -67,7 +148,7 @@ function secrets() {
   return [current, process.env.SOLO_SESSION_SECRET_PREVIOUS].filter(Boolean) as string[];
 }
 
-export async function seal(value: SecretSoloSession | PhotoAsset) {
+export async function seal(value: SealedAsset) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
@@ -77,7 +158,7 @@ export async function seal(value: SecretSoloSession | PhotoAsset) {
   return `${base64Url(iv)}.${base64Url(new Uint8Array(encrypted))}`;
 }
 
-export async function unseal<T extends SecretSoloSession | PhotoAsset>(token: string, expectedKind: T['kind']): Promise<T> {
+export async function unseal<T extends SealedAsset>(token: string, expectedKind: T['kind']): Promise<T> {
   if (token.length > 50_000) throw new Error('Session token is too large.');
   const [ivValue, encryptedValue, extra] = token.split('.');
   if (!ivValue || !encryptedValue || extra) throw new Error('Malformed session token.');
@@ -89,7 +170,25 @@ export async function unseal<T extends SecretSoloSession | PhotoAsset>(token: st
         fromBase64Url(encryptedValue),
       );
       const value = JSON.parse(decoder.decode(clear)) as T;
-      if (value.kind !== expectedKind || value.version !== 1 || Date.parse(value.expiresAt) <= Date.now()) {
+      if (expectedKind === 'solo-session' && !(value as SecretSoloSession).transitScope) {
+        (value as SecretSoloSession).transitScope = 'all';
+      }
+      if (expectedKind === 'solo-session') {
+        const session = value as SecretSoloSession;
+        session.questionUses = normalizeQuestionUses(session.questionUses ?? {});
+        session.hidingTimeMinutes = session.hidingTimeMinutes ?? 30;
+        session.stationZoneMiles = session.stationZoneMiles ?? 0.25;
+      }
+      const validVersion = expectedKind === 'solo-session' ? value.version === 2 : value.version === 1;
+      const validCurrentSoloShape = expectedKind !== 'solo-session' || (
+        ['all', 'primary'].includes((value as SecretSoloSession).transitScope) &&
+        Array.isArray((value as SecretSoloSession).activeEffects) &&
+        Array.isArray((value as SecretSoloSession).publicMoves) &&
+        Array.isArray((value as SecretSoloSession).deck?.drawPile) &&
+        Array.isArray((value as SecretSoloSession).deck?.hand) &&
+        Number.isInteger((value as SecretSoloSession).questionNumber)
+      );
+      if (value.kind !== expectedKind || !validVersion || !validCurrentSoloShape || Date.parse(value.expiresAt) <= Date.now()) {
         throw new Error('Session token has expired or has the wrong type.');
       }
       return value;
@@ -98,28 +197,6 @@ export async function unseal<T extends SecretSoloSession | PhotoAsset>(token: st
     }
   }
   throw new Error('Session token is invalid or expired.');
-}
-
-function commitmentObject(session: Pick<SecretSoloSession,
-  'sessionId' | 'departureTime' | 'station' | 'spot' | 'panorama' | 'route' | 'salt' | 'commitmentVersion' | 'stationPanorama'>) {
-  return {
-    sessionId: session.sessionId,
-    departureTime: session.departureTime,
-    station: session.station,
-    spot: session.spot,
-    panorama: session.panorama,
-    route: session.route,
-    salt: session.salt,
-    ...(session.commitmentVersion === 2 ? {
-      commitmentVersion: 2,
-      stationPanorama: session.stationPanorama,
-    } : {}),
-  };
-}
-
-export async function commitmentFor(session: Parameters<typeof commitmentObject>[0]) {
-  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(JSON.stringify(commitmentObject(session))));
-  return base64Url(new Uint8Array(digest));
 }
 
 export function jsonError(message: string, status = 400) {

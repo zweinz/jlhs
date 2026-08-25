@@ -110,6 +110,7 @@ def point_segment_distance_squared(px, py, segment):
 
 
 nearest_names = []
+nearest_bearings = []
 for row in range(HEIGHT):
     for column in range(WIDTH):
         lng, lat = cell_center(column, row)
@@ -122,9 +123,14 @@ for row in range(HEIGHT):
                 candidates.update(buckets.get((bucket_x + offset_x, bucket_y + offset_y), []))
         if not candidates:
             nearest_names.append('Unknown')
+            nearest_bearings.append(None)
             continue
         nearest_index = min(candidates, key=lambda index: point_segment_distance_squared(px, lat, segments[index]))
-        nearest_names.append(segments[nearest_index][4])
+        ax, ay, bx, by, name = segments[nearest_index]
+        nearest_names.append(name)
+        # Axial degrees clockwise from north. A street has no forward direction,
+        # so opposite headings intentionally collapse to the same 0-179 value.
+        nearest_bearings.append(round(math.degrees(math.atan2(bx - ax, by - ay))) % 180)
 
 street_names = sorted(set(nearest_names))
 street_indexes = {name: index for index, name in enumerate(street_names)}
@@ -133,13 +139,14 @@ street_output = {
         'dataset': 'Streets – Active and Retired (active records only)',
         'sourceUrl': 'https://data.sfgov.org/d/3psu-pn9h',
         'retrieved': '2026-08-24',
-        'format': 'Nearest named centerline sampled at approximately 300-foot cells',
+        'format': 'Nearest named centerline and axial bearing sampled at approximately 300-foot cells',
     },
     'bounds': {'west': WEST, 'south': SOUTH, 'east': EAST, 'north': NORTH},
     'width': WIDTH,
     'height': HEIGHT,
     'names': street_names,
     'values': [street_indexes[name] for name in nearest_names],
+    'bearings': nearest_bearings,
 }
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

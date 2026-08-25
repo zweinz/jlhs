@@ -92,7 +92,7 @@ function clipRectangleToBisector(start: Position, end: Position, hotter: boolean
   return turf.polygon([coordinates]) as Area;
 }
 
-function tentacleArea(constraint: Constraint, regions: Record<string, Area>) {
+function tentacleArea(constraint: Constraint) {
   const category = constraint.category ?? 'museum';
   const reach = constraint.distanceMiles ?? 1;
   if (category === 'transit-route') {
@@ -116,16 +116,15 @@ function tentacleArea(constraint: Constraint, regions: Record<string, Area>) {
   if (constraint.answer === 'not-within-reach' || constraint.answer === 'no') return invert(reachable);
   const selected = constraint.regionId ? pois.find((poi) => poi.id === constraint.regionId) : undefined;
   if (!selected || !eligibleSources.some((poi) => poi.id === selected.id)) return empty();
-  const region = regions[selected.id];
-  if (!region) return empty();
-  return (
-    (turf.intersect(
-      turf.featureCollection([
-        region,
-        turf.circle(point(selected), reach, { units: 'miles', steps: 32 }) as Area,
-      ]),
-    ) as Area | null) ?? empty()
-  );
+  let selectedArea = turf.circle(point(selected), reach, { units: 'miles', steps: 32 }) as Area;
+  for (const competitor of eligibleSources) {
+    if (competitor.id === selected.id) continue;
+    const nearerSelected = clipRectangleToBisector(competitor, selected, true);
+    const intersection = turf.intersect(turf.featureCollection([selectedArea, nearerSelected]));
+    if (!intersection) return empty();
+    selectedArea = intersection as Area;
+  }
+  return clipToFrame(selectedArea);
 }
 
 export function constraintArea(constraint: Constraint, regions: Record<string, Area> = {}): Area {
@@ -155,7 +154,7 @@ export function constraintArea(constraint: Constraint, regions: Record<string, A
     );
     return constraint.answer === 'farther' ? invert(closerArea) : closerArea;
   }
-  if (constraint.kind === 'tentacle') return tentacleArea(constraint, regions);
+  if (constraint.kind === 'tentacle') return tentacleArea(constraint);
   if (constraint.kind === 'matching-region') {
     const matchingAnswer = (area: Area) => constraint.answer === 'no' ? invert(area) : area;
     if (constraint.category === 'transit-route') {

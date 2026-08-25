@@ -102,7 +102,14 @@ export function validateState(value: unknown): SharedState {
     }
   }
   if (state.endGameActive !== undefined && typeof state.endGameActive !== 'boolean') throw Error('Invalid end-game state');
-  return { ...state, areaDisplayMode, transitScope, endGameActive: state.endGameActive ?? false };
+  const { coastline: _removedCoastlineLayer, ...layers } = state.layers;
+  return {
+    ...state,
+    layers: { ...layers, 'sticky-map': state.layers['sticky-map'] ?? true },
+    areaDisplayMode,
+    transitScope,
+    endGameActive: state.endGameActive ?? false,
+  };
 }
 
 function migrate(value: unknown) {
