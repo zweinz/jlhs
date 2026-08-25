@@ -3,6 +3,12 @@ import resolveMapLink from '../api/resolve-map-link';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFromGoogleMapsUrl } from './mapLinks';
 
 describe('Google Maps link coordinates', () => {
+  it('percent-encodes the exact coordinate query for external Maps clients', () => {
+    expect(googleMapsLinkForPosition({ lat: 37.7651667, lng: -122.3890556 })).toBe(
+      'https://www.google.com/maps/search/?api=1&query=37.7651667%2C-122.3890556',
+    );
+  });
+
   it('builds a copyable exact-place URL without a Places Details request', () => {
     const url = new URL(googleMapsLinkForPlace('ChIJ-test_place', { lat: 37.77, lng: -122.44 }));
     expect(url.searchParams.get('api')).toBe('1');

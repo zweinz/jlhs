@@ -1109,6 +1109,16 @@ export default function App() {
     }
   };
 
+  const copySoloRevealPin = async () => {
+    if (!solo?.reveal) return;
+    try {
+      await navigator.clipboard.writeText(`${solo.reveal.spot.lat}, ${solo.reveal.spot.lng}`);
+      setMessage('Exact hiding coordinates copied.');
+    } catch {
+      setMessage('The hiding coordinates could not be copied.');
+    }
+  };
+
   return (
     <main>
       <header>
@@ -1147,7 +1157,10 @@ export default function App() {
               <p><b>{solo.reveal.station.name}</b></p>
               <p className={solo.reveal.commitmentValid ? 'success-line' : 'warning-line'}>{solo.reveal.commitmentValid ? 'Commitment verified — the location did not change.' : 'Commitment verification failed.'}</p>
               <img src={solo.reveal.panorama.imageUrl} alt="Street View at the revealed AI hiding spot" />
-              <a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open exact hiding pin</a>
+              <div className="map-place-actions">
+                <a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open exact hiding pin</a>
+                <button type="button" className="secondary" onClick={copySoloRevealPin}>Copy coordinates</button>
+              </div>
               <dl><div><dt>Departure</dt><dd>{new Date(solo.reveal.route.departureTime).toLocaleString()}</dd></div><div><dt>Arrival</dt><dd>{new Date(solo.reveal.route.arrivalTime).toLocaleString()}</dd></div><div><dt>Journey</dt><dd>{Math.round(solo.reveal.route.durationSeconds / 60)} min · {solo.reveal.route.summary.join(' → ')}</dd></div><div><dt>Imagery</dt><dd>{solo.reveal.panorama.date ?? 'date unavailable'}</dd></div></dl>
               <details><summary>Verification proof</summary><code className="proof">{solo.reveal.commitment}</code><p className="helper">Session {solo.reveal.sessionId}<br />Salt {solo.reveal.salt}</p></details>
             </div>}
