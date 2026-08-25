@@ -33,7 +33,7 @@ describe('Solo question accounting', () => {
     expect([0, 1].map((uses) => keptCardsForQuestion(measuring, uses))).toEqual([1, 2]);
     expect([0, 1].map((uses) => keptCardsForQuestion(photo, uses))).toEqual([1, 2]);
     expect([0, 1].map((uses) => keptCardsForQuestion({ kind: 'tentacle' }, uses))).toEqual([2, 4]);
-    expect(keptCardsFromQuestionUses({ 'radar:1.000': 3, 'tentacle:museum': 2 })).toBe(12);
+    expect(keptCardsFromQuestionUses({ 'radar:1.000': 3, 'tentacle:museum': 2, 'photo-reference:you': 8 })).toBe(12);
   });
 
   it('uses distance for radar identity and subject for category cards', () => {
@@ -100,6 +100,9 @@ describe('Solo camera and time rules', () => {
     expect(tree.source).toBe('spot');
     expect(tree.displayText).toMatch(/at the hiding location/);
     expect(soloPhotoPlan('the-sky', spot, station, 'north', 42).pitch).toBe(90);
+    const selfie = soloPhotoPlan('you', spot, station, 'north', 42);
+    expect(selfie).toMatchObject({ source: 'spot', staticAssetUrl: '/solo-selfie.svg' });
+    expect(selfie.unavailableReason).toBeUndefined();
     expect(soloPhotoPlan('restaurant-interior', spot, station, 'north', 42).unavailableReason).toMatch(/outdoor/i);
   });
 
@@ -350,6 +353,29 @@ describe('Solo token and commitment security', () => {
     expect(body.photoUrl).toBeUndefined();
     expect(body.cardsDrawn).toBe(1);
     expect(body.cardsKept).toBe(1);
+  });
+
+  it('serves the selfie easter egg without drawing or keeping cards', async () => {
+    const value = session();
+    value.commitment = await commitmentFor(value);
+    const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: await seal(value),
+        constraint: {
+          id: 'photo-selfie', name: 'You', kind: 'photo-reference', enabled: true,
+          answer: 'yes', origin: value.spot, category: 'you',
+        },
+      }),
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.displayText).toMatch(/identity successfully concealed/i);
+    expect(body.photoUrl).toBe('/solo-selfie.svg');
+    expect(body.cardsDrawn).toBe(0);
+    expect(body.cardsKept).toBe(0);
+    expect(body.totalCardsDrawn).toBe(0);
+    expect(body.totalCardsKept).toBe(0);
   });
 
   it('starts end game for an in-zone pin and charges exactly one card for a miss', async () => {

@@ -37,7 +37,7 @@ export type AnySoloPhotoKind = SoloPhotoKind | LegacySoloPhotoKind;
 export const SOLO_PHOTO_SUBJECTS: Array<{ id: SoloPhotoKind; label: string; help: string }> = [
   { id: 'a-tree', label: 'A tree', help: 'Approximate: a deterministic streetscape view at the hiding location; the image may not contain a tree.' },
   { id: 'the-sky', label: 'The sky', help: 'Supported: a deterministic view aimed straight up at the hiding location.' },
-  { id: 'you', label: 'You', help: 'Unavailable: Street View cannot take a new photograph of the AI hider, so the answer is “I cannot answer.”' },
+  { id: 'you', label: 'You', help: 'Easter egg: the AI supplies its own suspiciously anonymous selfie. Free to ask; no cards are drawn or kept.' },
   { id: 'widest-street', label: 'Widest street', help: 'Approximate: a wide deterministic streetscape at the hiding location; Street View cannot prove it is the zone’s widest.' },
   { id: 'tallest-structure-in-your-sightline', label: 'Tallest structure in your sightline', help: 'Approximate: an upward-framed deterministic view at the hiding location.' },
   { id: 'any-building-visible-from-station', label: 'Any building visible from station', help: 'Rulebook-card approximation from the station panorama, framed upward to include a nearby building.' },
@@ -165,7 +165,7 @@ export function keptCardsForQuestion(constraint: Pick<Constraint, 'kind'>, prior
 export function keptCardsFromQuestionUses(questionUses: Record<string, number>) {
   return Object.entries(questionUses).reduce((total, [key, uses]) => {
     const kind = key.split(':', 1)[0] as Constraint['kind'];
-    const base = QUESTION_DEFINITIONS[kind]?.baseKeepCount ?? 0;
+    const base = key === 'photo-reference:you' ? 0 : QUESTION_DEFINITIONS[kind]?.baseKeepCount ?? 0;
     return total + base * uses * (uses + 1) / 2;
   }, 0);
 }
@@ -199,6 +199,7 @@ export type SoloPhotoPlan = {
   pitch: number;
   fov: number;
   unavailableReason?: string;
+  staticAssetUrl?: string;
 };
 
 const normalizedHeading = (heading: number) => ((heading % 360) + 360) % 360;
@@ -247,7 +248,14 @@ export function soloPhotoPlan(
   if (kind === 'five-buildings') {
     return atSpot('Five buildings · Street View approximation at the hiding location', seededHeading + 225, 0, 120);
   }
-  if (kind === 'you') return unavailable('Street View cannot take a new photograph of the AI hider');
+  if (kind === 'you') return {
+    source: 'spot',
+    displayText: 'You · AI hider selfie (identity successfully concealed)',
+    heading: normalizedHeading(seededHeading),
+    pitch: 0,
+    fov: 90,
+    staticAssetUrl: '/solo-selfie.svg',
+  };
   if (kind === 'trace-nearest-street-path') return unavailable('an unmodified Street View image cannot provide the required map trace');
   if (kind === 'restaurant-interior') return unavailable('Solo uses outdoor Street View and cannot show a restaurant interior');
   if (kind === 'park') return unavailable('the available metadata cannot verify a rule-compliant park photo');

@@ -42,6 +42,10 @@ export default async function handler(request: Request) {
     const priorUses = session.questionUses[key] ?? 0;
     let cardsDrawn = cardsForQuestion(constraint, priorUses);
     let cardsKept = keptCardsForQuestion(constraint, priorUses);
+    if (constraint.kind === 'photo-reference' && constraint.category === 'you') {
+      cardsDrawn = 0;
+      cardsKept = 0;
+    }
     let answer = constraint.answer;
     let displayText = '';
     let resolvedRegionId: string | undefined;
@@ -56,7 +60,10 @@ export default async function handler(request: Request) {
         session.wideHeading,
       );
       let panorama = plan.source === 'station' ? session.stationPanorama : session.panorama;
-      if (plan.unavailableReason) {
+      if (plan.staticAssetUrl) {
+        displayText = plan.displayText;
+        photoUrl = plan.staticAssetUrl;
+      } else if (plan.unavailableReason) {
         displayText = plan.displayText;
         photoUrl = undefined;
       } else if (plan.source === 'station' && !panorama) {
@@ -66,7 +73,7 @@ export default async function handler(request: Request) {
           session.stationPanorama = panorama;
         }
       }
-      if (!plan.unavailableReason && panorama) {
+      if (!plan.staticAssetUrl && !plan.unavailableReason && panorama) {
         const asset: PhotoAsset = {
           kind: 'solo-photo', version: 1, expiresAt: session.expiresAt,
           panoramaId: panorama.id,
@@ -77,7 +84,7 @@ export default async function handler(request: Request) {
         const assetToken = await seal(asset);
         photoUrl = `/api/solo/photo?token=${encodeURIComponent(assetToken)}`;
         displayText = plan.displayText;
-      } else if (!plan.unavailableReason) {
+      } else if (!plan.staticAssetUrl && !plan.unavailableReason) {
         displayText = `I cannot answer: outdoor Street View is unavailable at the ${plan.source === 'station' ? 'central station' : 'hiding location'}`;
       }
       answer = 'yes';

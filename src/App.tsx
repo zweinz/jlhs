@@ -156,7 +156,7 @@ const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
 const soloPhotoChoices: RulebookSubject[] = SOLO_PHOTO_SUBJECTS.map((subject) => ({
   ...subject,
   status: 'in-play',
-  support: subject.help.startsWith('Unavailable') ? 'not-mapped' : subject.help.startsWith('Supported') ? 'exact' : 'approximate',
+  support: subject.help.startsWith('Unavailable') ? 'not-mapped' : subject.help.startsWith('Supported') || subject.help.startsWith('Easter egg') ? 'exact' : 'approximate',
   notes: [subject.help, 'Solo house rule: Street View approximates the rulebook framing without using a vision model.'],
 }));
 
@@ -178,7 +178,9 @@ function restoredSolo(): SoloClientSession | undefined {
       const constraint = constraints.get(id);
       return [id, constraint ? {
         ...record,
-        cardsKept: record.cardsKept ?? keptCardsForQuestion(constraint, Math.max(0, record.repetition - 1)),
+        cardsKept: record.cardsKept ?? (constraint.kind === 'photo-reference' && constraint.category === 'you'
+          ? 0
+          : keptCardsForQuestion(constraint, Math.max(0, record.repetition - 1))),
         displayText: publicSoloDisplayText(constraint.kind, record.displayText),
       } : record];
     }));
@@ -1502,7 +1504,7 @@ export default function App() {
                   <p className="question-help">{definition.help}</p>
                   {!questionReady && <p className="draft-status">Draft disabled · add {missingFields.join(' and ')} to enable it.</p>}
                   {state.mode === 'hider' && <div className={`answer-result ${(constraint.kind === 'endgame-confirmation' || (state.hiderPosition && questionReady)) ? '' : 'waiting'}`}><span>Hider answer</span><strong>{!questionReady ? 'Complete the draft first' : constraint.kind === 'endgame-confirmation' ? 'Record whether this pin is inside your hiding zone' : state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
-                  {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={`${constraint.name} Street View answer`} />}</div>}
+                  {askedRecord && <div className="answer-result"><span>AI answer · use {askedRecord.repetition} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={constraint.kind === 'photo-reference' && constraint.category === 'you' ? 'AI hider selfie easter egg' : `${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
                     {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answerSet === false ? '' : constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'], answerSet: true })}>{constraint.kind === 'endgame-confirmation' && <option value="">Choose result</option>}{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{constraint.kind === 'endgame-confirmation' ? answer === 'yes' ? 'Correct · inside zone' : 'Incorrect · outside zone' : answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
                     {prescribedDistances ? <>
@@ -1518,7 +1520,8 @@ export default function App() {
                     {!solo && constraint.kind === 'tentacle' && constraint.answer === 'yes' && <label className="wide">Named {category === 'transit-route' ? 'route' : 'POI'}<select value={constraint.regionId ?? ''} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}><option value="">Choose the hider’s answer</option>{category === 'transit-route' ? primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= (constraint.distanceMiles ?? 1)).map((route) => <option key={route.id} value={route.id}>{route.id} line</option>) : tentacleChoices.map((poi) => <option key={poi.id} value={poi.id}>{poi.name}</option>)}</select></label>}
                   </div>
                   {!askedRecord && constraint.kind === 'endgame-confirmation' && <p className="question-cost">Free to ask · a correct pin starts the end game; an incorrect pin makes the hider draw 1 penalty card.</p>}
-                  {!askedRecord && constraint.kind !== 'endgame-confirmation' && definition.baseDrawCount !== undefined && definition.baseKeepCount !== undefined && <p className="question-cost">Selected card asked {selectedPriorUses}x before · next reward: perform “draw {definition.baseDrawCount}, keep {definition.baseKeepCount}” {selectedPriorUses + 1}× ({cardsForQuestion(constraint, selectedPriorUses)} drawn, {keptCardsForQuestion(constraint, selectedPriorUses)} kept total).</p>}
+                  {!askedRecord && solo && constraint.kind === 'photo-reference' && category === 'you' && <p className="question-cost">Easter egg · free to ask, with no cards drawn or kept.</p>}
+                  {!askedRecord && !(solo && constraint.kind === 'photo-reference' && category === 'you') && constraint.kind !== 'endgame-confirmation' && definition.baseDrawCount !== undefined && definition.baseKeepCount !== undefined && <p className="question-cost">Selected card asked {selectedPriorUses}x before · next reward: perform “draw {definition.baseDrawCount}, keep {definition.baseKeepCount}” {selectedPriorUses + 1}× ({cardsForQuestion(constraint, selectedPriorUses)} drawn, {keptCardsForQuestion(constraint, selectedPriorUses)} kept total).</p>}
                   {constraint.kind === 'endgame-confirmation' && !solo && questionReady && <p className="derived">Recorded result: <b>{constraint.answer === 'yes' ? 'Correct — end game active; no cards drawn' : 'Incorrect — hider draws 1 penalty card'}</b></p>}
                   {constraint.kind === 'matching-region' && category === 'transit-route' && <p className="derived">No distance applies. “Yes” keeps only stations where this service actually stops; “No” removes those stations.</p>}
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{constraint.originSet === false ? 'set the seeker pin' : matchingSource ?? 'set the seeker pin'}</b></p>}
