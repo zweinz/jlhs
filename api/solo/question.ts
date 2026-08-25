@@ -79,7 +79,10 @@ export default async function handler(request: Request) {
       }
       answer = 'yes';
     } else {
-      const result = solveHiderQuestion(constraint, session.spot);
+      const answerPosition = constraint.kind === 'matching-region' && constraint.category === 'transit-route'
+        ? session.station.position
+        : session.spot;
+      const result = solveHiderQuestion(constraint, answerPosition);
       if (!result.answer) return jsonError(result.displayText, 422);
       answer = result.answer;
       displayText = publicSoloDisplayText(constraint.kind, result.displayText);

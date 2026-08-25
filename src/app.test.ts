@@ -10,7 +10,7 @@ import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjec
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import { decodeState, encodeState, validateState } from './share';
-import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, shouldDisplayStationZone, transitRouteLabel, transitRoutes, validStations } from './transit';
+import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, routesForStation, shouldDisplayStationZone, stationIdsMatchingTransitQuestions, stationRouteProvenance, transitRouteLabel, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
 
 const base = (kind: Constraint['kind']): Constraint => ({
@@ -224,11 +224,13 @@ it('models named and not-within-reach tentacle answers', () => {
   expect(turf.area(outside)).toBeGreaterThan(turf.area(named));
 });
 
-it('models transit-line matching and large-game metro tentacles', () => {
+it('keeps transit-line matching station-based and models large-game metro tentacles', () => {
   const jStation = validStations.find((station) => eligibleStationIds({}, { J: 'in' }).includes(station.id))!;
-  const matching = constraintArea({ ...base('matching-region'), category: 'transit-route', regionId: 'J', distanceMiles: 0.25 });
+  const nearMatching = constraintArea({ ...base('matching-region'), category: 'transit-route', regionId: 'J', distanceMiles: 0.05 });
+  const farMatching = constraintArea({ ...base('matching-region'), category: 'transit-route', regionId: 'J', distanceMiles: 5 });
   const tentacle = constraintArea({ ...base('tentacle'), origin: jStation, category: 'transit-route', regionId: 'J', distanceMiles: 15 });
-  expect(turf.area(matching)).toBeGreaterThan(0);
+  expect(turf.area(nearMatching)).toBeCloseTo(turf.area(sfFrame()), -1);
+  expect(turf.area(farMatching)).toBeCloseTo(turf.area(nearMatching), -1);
   expect(turf.area(tentacle)).toBeGreaterThan(0);
 });
 
@@ -264,6 +266,26 @@ describe('transit layers and cuts', () => {
   it('generates valid-station regions and configurable zone geometry', () => {
     expect(Object.keys(partition('game-valid-station'))).toHaveLength(193);
     expect(turf.area(stationZoneArea([validStations[0].id], 0.25))).toBeGreaterThan(0);
+  });
+  it('uses scheduled stops to apply transit matching answers exactly', () => {
+    const rapidStop = validStations.find((station) => station.name === 'Geary Blvd & 6th Ave')!;
+    const localOnlyStop = validStations.find((station) => station.name === 'V.A. Hospital')!;
+    expect(routesForStation(rapidStop.id)).toEqual(expect.arrayContaining(['38', '38R']));
+    expect(routesForStation(localOnlyStop.id)).toContain('38');
+    expect(routesForStation(localOnlyStop.id)).not.toContain('38R');
+
+    const candidates = [rapidStop.id, localOnlyStop.id];
+    const question = { ...base('matching-region'), category: 'transit-route', regionId: '38R' };
+    expect(stationIdsMatchingTransitQuestions(candidates, [{ ...question, answer: 'yes' }])).toEqual([rapidStop.id]);
+    expect(stationIdsMatchingTransitQuestions(candidates, [{ ...question, answer: 'no' }])).toEqual([localOnlyStop.id]);
+    expect(stationIdsMatchingTransitQuestions(candidates, [{ ...question, answer: 'yes', enabled: false }])).toEqual(candidates);
+    const intersected = stationIdsMatchingTransitQuestions(validStations.map((station) => station.id), [
+      { ...question, id: 'n-yes', regionId: 'N', answer: 'yes' },
+      { ...question, id: 't-no', regionId: 'T', answer: 'no' },
+    ]);
+    expect(intersected.length).toBeGreaterThan(0);
+    expect(intersected.every((stationId) => routesForStation(stationId).includes('N') && !routesForStation(stationId).includes('T'))).toBe(true);
+    expect(stationRouteProvenance.dataset).toMatch(/GTFS/);
   });
   it('turns off stations whose hiding zones do not overlap the feasible area', () => {
     const nearby = validStations[0];

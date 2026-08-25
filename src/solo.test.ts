@@ -17,6 +17,7 @@ import {
   verifyRevealCommitment,
   type SoloReveal,
 } from './solo';
+import { validStations } from './transit';
 
 describe('Solo question accounting', () => {
   it('multiplies draw costs for repeated cards', () => {
@@ -179,7 +180,10 @@ describe('Solo token and commitment security', () => {
     const value = session();
     const token = await seal(value);
     await expect(unseal<SecretSoloSession>(token, 'solo-session')).resolves.toEqual(value);
-    const tamperedToken = `${token.slice(0, -1)}${token.endsWith('x') ? 'y' : 'x'}`;
+    const [iv, ciphertext] = token.split('.');
+    const tamperIndex = Math.floor(ciphertext.length / 2);
+    const tamperedCiphertext = `${ciphertext.slice(0, tamperIndex)}${ciphertext[tamperIndex] === 'x' ? 'y' : 'x'}${ciphertext.slice(tamperIndex + 1)}`;
+    const tamperedToken = `${iv}.${tamperedCiphertext}`;
     await expect(unseal<SecretSoloSession>(tamperedToken, 'solo-session')).rejects.toThrow(/invalid|expired/i);
   });
 
@@ -276,6 +280,27 @@ describe('Solo token and commitment security', () => {
     expect(body.totalCardsDrawn).toBe(3);
     expect(body.totalCardsKept).toBe(1);
     expect(body.resolvedRegionId).toBeUndefined();
+  });
+
+  it('answers transit matching from the committed station, not the nearest station to the hiding spot', async () => {
+    const rapidStop = validStations.find((station) => station.name === 'Geary Blvd & 6th Ave')!;
+    const localOnlyStop = validStations.find((station) => station.name === 'V.A. Hospital')!;
+    const value = session();
+    value.station = { id: rapidStop.id, name: rapidStop.name, position: rapidStop };
+    value.spot = localOnlyStop;
+    value.commitment = await commitmentFor(value);
+    const constraint = {
+      id: 'q-transit-match', name: 'Matching transit service', kind: 'matching-region' as const,
+      enabled: true, answer: 'no' as const, origin: value.spot, category: 'transit-route', regionId: '38R',
+    };
+    const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), constraint }),
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.answer).toBe('yes');
+    expect(body.displayText).toBe('Yes');
   });
 
   it('announces end game at the zone and reveals only inside the 30-meter finish radius', async () => {

@@ -2,7 +2,7 @@ import * as turf from '@turf/turf';
 import type { Feature, Polygon } from 'geojson';
 import type { Area, Constraint, Position } from './types';
 import { pois, SF_BOUNDS, SF_CENTER, type PoiCategory } from './data';
-import { coastline, distanceToRoute, nearestCoastlineDistance, primaryTransitRoutes, routesForStation, transitRoutes, validStations } from './transit';
+import { coastline, distanceToRoute, nearestCoastlineDistance, primaryTransitRoutes, validStations } from './transit';
 import {
   districtAt,
   elevationComparisonArea,
@@ -159,11 +159,9 @@ export function constraintArea(constraint: Constraint, regions: Record<string, A
   if (constraint.kind === 'matching-region') {
     const matchingAnswer = (area: Area) => constraint.answer === 'no' ? invert(area) : area;
     if (constraint.category === 'transit-route') {
-      const stationIds = validStations
-        .filter((station) => routesForStation(station.id).includes(constraint.regionId ?? ''))
-        .map((station) => station.id);
-      const routeStations = stationZoneArea(stationIds, constraint.distanceMiles ?? 0.25);
-      return constraint.answer === 'no' ? invert(routeStations) : routeStations;
+      // Transit-line matching is a property of the chosen hiding station, not a distance polygon.
+      // The station list is filtered separately so nearby stations do not bleed into each other.
+      return frame();
     }
     if (constraint.category === 'station-name-length') {
       const source = nearestPoi('game-valid-station', constraint.origin);

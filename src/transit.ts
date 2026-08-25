@@ -1,9 +1,10 @@
 import * as turf from '@turf/turf';
 import type { Feature, FeatureCollection, LineString, MultiLineString } from 'geojson';
 import coastlineRaw from './data/coastline.json';
+import stationRoutesRaw from './data/station-routes.json';
 import routesRaw from './data/transit-routes.json';
 import { pois } from './data';
-import type { Eligibility, Position } from './types';
+import type { Constraint, Eligibility, Position } from './types';
 
 export type TransitRoute = {
   id: string;
@@ -39,30 +40,44 @@ export const primaryTransitRoutes = transitRoutes.filter((route) => route.mode !
 export const otherTransitRoutes = transitRoutes.filter((route) => route.mode === 'other-transit');
 export const transitRouteGeoJson = routeCollection;
 export const transitProvenance = routeCollection.provenance;
+const stationRouteData = stationRoutesRaw as {
+  provenance: Record<string, string>;
+  stationRoutes: Record<string, string[]>;
+};
+export const stationRouteProvenance = stationRouteData.provenance;
 export const coastline = (coastlineRaw as FeatureCollection<MultiLineString>).features[0];
 export const coastlineProvenance = (coastlineRaw as unknown as { provenance: Record<string, string> }).provenance;
 export const validStations = pois.filter((poi) => poi.category === 'game-valid-station');
 
-const stationRoutes = new Map<string, string[]>();
-for (const station of validStations) {
-  const stationPoint = turf.point([station.lng, station.lat]);
-  stationRoutes.set(
-    station.id,
-    transitRoutes
-      .filter((route) =>
-        route.features.some((feature) => {
-          const lines = feature.geometry.type === 'MultiLineString'
-            ? feature.geometry.coordinates.map((coordinates) => turf.lineString(coordinates))
-            : [feature as Feature<LineString>];
-          return lines.some((line) => turf.pointToLineDistance(stationPoint, line, { units: 'miles' }) <= 0.1);
-        }),
-      )
-      .map((route) => route.id),
-  );
-}
+const knownRouteIds = new Set(transitRoutes.map((route) => route.id));
+const stationRoutes = new Map(validStations.map((station) => [
+  station.id,
+  (stationRouteData.stationRoutes[station.id] ?? []).filter((routeId) => knownRouteIds.has(routeId)),
+]));
 
 export function routesForStation(stationId: string) {
   return stationRoutes.get(stationId) ?? [];
+}
+
+export function stationIdsMatchingTransitQuestions(stationIds: string[], constraints: Constraint[]) {
+  const questions = constraints.filter((constraint) =>
+    constraint.enabled &&
+    constraint.kind === 'matching-region' &&
+    constraint.category === 'transit-route' &&
+    (constraint.answer === 'yes' || constraint.answer === 'no') &&
+    constraint.regionId,
+  );
+  if (questions.length === 0) return stationIds;
+  const selected = new Set(stationIds);
+  return validStations.filter((station) => {
+    if (!selected.has(station.id)) return false;
+    const routes = routesForStation(station.id);
+    return questions.every((question) =>
+      question.answer === 'yes'
+        ? routes.includes(question.regionId!)
+        : !routes.includes(question.regionId!),
+    );
+  }).map((station) => station.id);
 }
 
 const primaryRouteIds = new Set(primaryTransitRoutes.map((route) => route.id));
