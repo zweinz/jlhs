@@ -194,7 +194,7 @@ article.radar-preview-active {
 .question-help { margin: 0 0 .6rem; color: #586573; font-size: .82rem; }
 .draft-status { margin: .35rem 0 .6rem; padding: .45rem .55rem; border-radius: .4rem; background: #fff7ed; color: #9a3412; font-size: .78rem; font-weight: 750; }
 .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
-.control-grid label, .map-link-field label {
+.control-grid label, .map-link-field label, .map-link-label {
   display: grid;
   gap: .25rem;
   color: #3f4d5a;
@@ -236,6 +236,7 @@ article.radar-preview-active {
   gap: .3rem;
   margin-top: .7rem;
 }
+.map-link-label { display: block; }
 .map-link-input { position: relative; }
 .map-link-input input { padding-right: 2.75rem; }
 .map-link-input .clear-link {
@@ -250,9 +251,14 @@ article.radar-preview-active {
   line-height: 1;
 }
 .map-link-input .clear-link:disabled { cursor: default; }
-.map-link-actions { display: grid; grid-template-columns: .8fr 1.2fr; gap: .4rem; }
+.map-link-actions { display: grid; grid-template-columns: 1.1fr 1fr; gap: .4rem; }
 .map-link-actions button { min-width: 0; padding-inline: .55rem; }
 .map-link-actions .location-button { font-size: .72rem; line-height: 1.15; }
+.manual-map-link { margin-top: .15rem; padding: .4rem .5rem; border-radius: .4rem; background: #f5f7fa; }
+.manual-map-link summary { cursor: pointer; color: #586573; font-size: .75rem; font-weight: 700; }
+.manual-map-link[open] { display: grid; gap: .4rem; }
+.manual-map-link label { margin-top: .25rem; font-size: .74rem; }
+.manual-use-link { width: 100%; }
 .secondary { background: #e5edf7; color: #173f75; }
 .danger { background: #9b1c1c; }
 .remove { width: 100%; margin-top: .8rem; }

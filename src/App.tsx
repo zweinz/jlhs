@@ -242,14 +242,42 @@ type MapLinkFieldProps = {
 
 function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLinkFieldProps) {
   const inputId = useId();
-  const [busy, setBusy] = useState<'link' | 'location' | undefined>();
+  const [busy, setBusy] = useState<'paste' | 'link' | 'location' | undefined>();
+  const resolveAndSet = async (link: string, successMessage: string) => {
+    const resolved = await resolveGoogleMapsLink(link);
+    if (!insideSanFrancisco(resolved)) throw new Error('That pin is outside the San Francisco working bounds.');
+    onResolved(resolved);
+    onMessage(successMessage);
+  };
+  const paste = async () => {
+    setBusy('paste');
+    let pasted: string;
+    try {
+      if (!navigator.clipboard?.readText) throw new Error('Clipboard unavailable');
+      pasted = (await navigator.clipboard.readText()).trim();
+    } catch {
+      onMessage('Clipboard access was blocked. Open “Enter or edit link manually,” press and hold the field, and choose Paste.');
+      setBusy(undefined);
+      return;
+    }
+    if (!pasted) {
+      onMessage('The clipboard is empty. Copy a Google Maps link, then try again.');
+      setBusy(undefined);
+      return;
+    }
+    onChange(pasted);
+    try {
+      await resolveAndSet(pasted, `${label} pasted and set from Google Maps.`);
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : 'Could not use the copied Google Maps link.');
+    } finally {
+      setBusy(undefined);
+    }
+  };
   const apply = async () => {
     try {
       setBusy('link');
-      const resolved = await resolveGoogleMapsLink(value.trim());
-      if (!insideSanFrancisco(resolved)) throw new Error('That pin is outside the San Francisco working bounds.');
-      onResolved(resolved);
-      onMessage(`${label} set from Google Maps.`);
+      await resolveAndSet(value.trim(), `${label} set from Google Maps.`);
     } catch (error) {
       onMessage(error instanceof Error ? error.message : 'Could not use that Google Maps link.');
     } finally {
@@ -288,28 +316,36 @@ function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLink
   };
   return (
     <div className="map-link-field">
-      <label htmlFor={inputId}>{label}</label>
-      <div className="map-link-input">
-        <input
-          id={inputId}
-          type="url"
-          inputMode="url"
-          autoCapitalize="none"
-          autoCorrect="off"
-          placeholder="Paste a Google Maps link"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <button className="clear-link" type="button" disabled={!value || !!busy} onClick={clear} aria-label={`Clear ${label} link`} title="Clear link">×</button>
-      </div>
+      <span className="map-link-label">{label}</span>
       <div className="map-link-actions">
-        <button className="secondary" type="button" disabled={!value.trim() || !!busy} onClick={apply}>
-          {busy === 'link' ? 'Reading…' : 'Use link'}
+        <button className="keep" type="button" disabled={!!busy} onClick={paste}>
+          {busy === 'paste' ? 'Pasting…' : 'Paste copied link'}
         </button>
         <button className="secondary location-button" type="button" disabled={!!busy} onClick={useCurrentLocation}>
           {busy === 'location' ? 'Locating…' : 'Use current location'}
         </button>
       </div>
+      <details className="manual-map-link">
+        <summary>Enter or edit link manually</summary>
+        <label htmlFor={inputId}>Google Maps URL</label>
+        <div className="map-link-input">
+          <input
+            id={inputId}
+            type="url"
+            inputMode="url"
+            enterKeyHint="done"
+            autoCapitalize="none"
+            autoCorrect="off"
+            placeholder="Paste a Google Maps link"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          <button className="clear-link" type="button" disabled={!value || !!busy} onClick={clear} aria-label={`Clear ${label} link`} title="Clear link">×</button>
+        </div>
+        <button className="secondary manual-use-link" type="button" disabled={!value.trim() || !!busy} onClick={apply}>
+          {busy === 'link' ? 'Reading…' : 'Use manually entered link'}
+        </button>
+      </details>
     </div>
   );
 }
