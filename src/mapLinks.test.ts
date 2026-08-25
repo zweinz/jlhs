@@ -3,9 +3,9 @@ import resolveMapLink from '../api/resolve-map-link';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFromGoogleMapsUrl } from './mapLinks';
 
 describe('Google Maps link coordinates', () => {
-  it('percent-encodes the exact coordinate query for external Maps clients', () => {
+  it('builds a direct decimal-coordinate place URL with an explicit map center', () => {
     expect(googleMapsLinkForPosition({ lat: 37.7651667, lng: -122.3890556 })).toBe(
-      'https://www.google.com/maps/search/?api=1&query=37.7651667%2C-122.3890556',
+      'https://www.google.com/maps/place/37.7651667,-122.3890556/@37.7651667,-122.3890556,18z',
     );
   });
 

@@ -53,12 +53,15 @@ export async function resolveGoogleMapsLink(value: string): Promise<Position> {
 }
 
 export function googleMapsLinkForPosition(value: Position) {
-  const params = new URLSearchParams({ api: '1', query: `${value.lat},${value.lng}` });
-  return `https://www.google.com/maps/search/?${params.toString()}`;
+  const coordinates = `${value.lat},${value.lng}`;
+  return `https://www.google.com/maps/place/${coordinates}/@${coordinates},18z`;
 }
 
 export function googleMapsLinkForPlace(placeId: string, value: Position) {
-  const url = new URL(googleMapsLinkForPosition(value));
-  url.searchParams.set('query_place_id', placeId);
-  return url.href;
+  const params = new URLSearchParams({
+    api: '1',
+    query: `${value.lat},${value.lng}`,
+    query_place_id: placeId,
+  });
+  return `https://www.google.com/maps/search/?${params.toString()}`;
 }
