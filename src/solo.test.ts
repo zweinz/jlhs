@@ -58,7 +58,9 @@ describe('Google transit request boundaries', () => {
 
   it('splits the 193 station pool into 100 and 93 destinations and enforces 30 minutes', async () => {
     const destinationCounts: number[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    const requestUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      requestUrls.push(url);
       const body = JSON.parse(String(init?.body));
       destinationCounts.push(body.destinations.length);
       return Response.json(body.destinations.map((_: unknown, index: number) => ({
@@ -70,6 +72,10 @@ describe('Google transit request boundaries', () => {
     }));
     const reachable = await reachableStations({ lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z');
     expect(destinationCounts).toEqual([100, 93]);
+    expect(requestUrls).toEqual([
+      'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix',
+      'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix',
+    ]);
     expect(reachable).toHaveLength(2);
     expect(chunk(Array.from({ length: 193 }), 100).map((part) => part.length)).toEqual([100, 93]);
   });

@@ -53,7 +53,7 @@ function routeHeaders(fieldMask: string) {
 }
 
 async function routeMatrix(origin: Position, destinations: Position[], departureTime: string) {
-  const response = await fetch('https://routes.googleapis.com/directions/v2:computeRouteMatrix', {
+  const response = await fetch('https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix', {
     method: 'POST',
     headers: routeHeaders('originIndex,destinationIndex,duration,distanceMeters,status,condition'),
     body: JSON.stringify({
