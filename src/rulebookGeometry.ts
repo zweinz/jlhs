@@ -59,7 +59,7 @@ export function elevationAt(position: Position) {
 
 export function elevationComparisonArea(origin: Position) {
   const threshold = elevationAt(origin);
-  return gridArea(elevationData, elevationData.valuesFeet, (elevation) => elevation <= threshold);
+  return gridArea(elevationData, elevationData.valuesFeet, (elevation) => elevation < threshold);
 }
 
 export function nearestStreet(position: Position) {

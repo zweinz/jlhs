@@ -22,6 +22,17 @@ export const excludedArea = (area: Area) => (turf.difference(turf.featureCollect
 const invert = excludedArea;
 const clipToFrame = (area: Area) =>
   (turf.intersect(turf.featureCollection([frame(), area])) as Area | null) ?? empty();
+const DISTANCE_CIRCLE_STEPS = 128;
+const DISTANCE_SAFETY_MILES = 0.001;
+
+function distanceCircle(position: Position, radiusMiles: number, keepInside: boolean) {
+  const safeRadius = keepInside
+    ? radiusMiles + DISTANCE_SAFETY_MILES
+    : Math.max(0, radiusMiles - DISTANCE_SAFETY_MILES);
+  return safeRadius === 0
+    ? empty()
+    : turf.circle(point(position), safeRadius, { units: 'miles', steps: DISTANCE_CIRCLE_STEPS }) as Area;
+}
 
 export function partitionLabelPosition(area: Area): Position {
   const [lng, lat] = turf.pointOnFeature(area).geometry.coordinates;
@@ -45,13 +56,14 @@ function unionAreas(areas: Area[]) {
   return turf.union(turf.featureCollection(areas)) as Area;
 }
 
-function categoryDistanceArea(category: string, origin: Position) {
+function categoryDistanceArea(category: string, origin: Position, keepInside: boolean) {
   const source = nearestPoi(category, origin);
   if (!source) return empty();
   const threshold = turf.distance(point(origin), point(source), { units: 'miles' });
+  if (threshold === 0) return empty();
   const circles = pois
     .filter((poi) => poi.category === category)
-    .map((poi) => turf.circle(point(poi), threshold, { units: 'miles', steps: 32 }) as Area);
+    .map((poi) => distanceCircle(poi, threshold, keepInside));
   return clipToFrame(unionAreas(circles));
 }
 
@@ -111,12 +123,12 @@ function tentacleArea(constraint: Constraint) {
       turf.distance(point(constraint.origin), point(poi), { units: 'miles' }) <= reach,
   );
   const reachable = unionAreas(
-    eligibleSources.map((poi) => turf.circle(point(poi), reach, { units: 'miles', steps: 32 }) as Area),
+    eligibleSources.map((poi) => distanceCircle(poi, reach, false)),
   );
   if (constraint.answer === 'not-within-reach' || constraint.answer === 'no') return invert(reachable);
   const selected = constraint.regionId ? pois.find((poi) => poi.id === constraint.regionId) : undefined;
   if (!selected || !eligibleSources.some((poi) => poi.id === selected.id)) return empty();
-  let selectedArea = turf.circle(point(selected), reach, { units: 'miles', steps: 32 }) as Area;
+  let selectedArea = distanceCircle(selected, reach, true);
   for (const competitor of eligibleSources) {
     if (competitor.id === selected.id) continue;
     const nearerSelected = clipRectangleToBisector(competitor, selected, true);
@@ -138,13 +150,14 @@ export function constraintArea(constraint: Constraint, regions: Record<string, A
   }
   if (constraint.kind === 'measuring') {
     const category = constraint.category ?? 'rail-station';
+    const keepInside = constraint.answer !== 'farther';
     const closerArea = category === 'sea-level'
       ? elevationComparisonArea(constraint.origin)
       : category === 'body-of-water'
         ? waterDistanceArea(constraint.origin)
         : category === 'coastline'
           ? clipToFrame(turf.buffer(coastline, nearestCoastlineDistance(constraint.origin), { units: 'miles', steps: 24 }) as Area)
-          : categoryDistanceArea(category, constraint.origin);
+          : categoryDistanceArea(category, constraint.origin, keepInside);
     return constraint.answer === 'farther' ? invert(closerArea) : closerArea;
   }
   if (constraint.kind === 'coastline') {
@@ -206,8 +219,9 @@ export function constraintArea(constraint: Constraint, regions: Record<string, A
   }
   const radius = constraint.distanceMiles ?? 1;
   const center = constraint.kind === 'closer' || constraint.kind === 'farther' ? constraint.target ?? constraint.origin : constraint.origin;
-  const circle = turf.circle(point(center), radius, { units: 'miles', steps: 64 }) as Area;
-  return constraint.kind === 'farther' || constraint.kind === 'exclusion' || constraint.answer === 'no'
+  const outsideAnswer = constraint.kind === 'farther' || constraint.kind === 'exclusion' || constraint.answer === 'no';
+  const circle = distanceCircle(center, radius, !outsideAnswer);
+  return outsideAnswer
     ? invert(circle)
     : circle;
 }

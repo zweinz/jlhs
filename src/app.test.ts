@@ -206,6 +206,62 @@ describe('missing measuring and matching geometry', () => {
     expect(hiderAnswer({ ...base('matching-region'), category: 'street-path' }, hider, {})).toMatch(/Yes|No/);
     expect(hiderAnswer({ ...base('matching-region'), category: 'supervisor-district' }, hider, {})).toMatch(/Yes|No/);
   });
+
+  it('handles a zero-distance category measurement without invalid geometry', () => {
+    const railStation = pois.find((poi) => poi.category === 'rail-station')!;
+    const closer = constraintArea({
+      ...base('measuring'), origin: railStation, category: 'rail-station', answer: 'closer',
+    });
+    const farther = constraintArea({
+      ...base('measuring'), origin: railStation, category: 'rail-station', answer: 'farther',
+    });
+    expect(turf.area(closer)).toBe(0);
+    expect(turf.area(farther)).toBeCloseTo(turf.area(sfFrame()), -1);
+  });
+
+  it('returns null when an administrative pin has no mapped region', () => {
+    const outsideDistricts = { lat: 37.705, lng: -122.525 };
+    expect(districtAt(outsideDistricts)).toBeUndefined();
+    expect(solveHiderQuestion({
+      ...base('matching-region'), origin: outsideDistricts, category: 'supervisor-district',
+    }, outsideDistricts)).toMatchObject({ answer: 'null', displayText: 'Null' });
+  });
+
+  it('keeps equal elevation in the farther answer area', () => {
+    const position = validStations[0];
+    const result = solveHiderQuestion({
+      ...base('measuring'), origin: position, category: 'sea-level',
+    }, position);
+    expect(result.answer).toBe('farther');
+    const area = constraintArea({
+      ...base('measuring'), origin: position, category: 'sea-level', answer: result.answer!,
+    });
+    expect(turf.booleanPointInPolygon([position.lng, position.lat], area)).toBe(true);
+  });
+
+  it('keeps truthful points just inside circular question boundaries', () => {
+    const origin = { lat: 37.77, lng: -122.44 };
+    const destination = turf.destination([origin.lng, origin.lat], 0.9999, 1.40625, { units: 'miles' });
+    const hider = { lat: destination.geometry.coordinates[1], lng: destination.geometry.coordinates[0] };
+    const radar = { ...base('radar'), origin, distanceMiles: 1 };
+    const radarResult = solveHiderQuestion(radar, hider);
+    expect(radarResult.answer).toBe('yes');
+    expect(turf.booleanPointInPolygon(
+      [hider.lng, hider.lat], constraintArea({ ...radar, answer: radarResult.answer! }),
+    )).toBe(true);
+
+    const hospital = pois.find((poi) => poi.category === 'hospital' && poi.name === 'CPMC Pacific Heights')!;
+    const nearLimitHider = { lat: 37.8051830029014, lng: -122.432185393785 };
+    const tentacle = {
+      ...base('tentacle'), origin: hospital, category: 'hospital', distanceMiles: 1,
+    };
+    const tentacleResult = solveHiderQuestion(tentacle, nearLimitHider);
+    expect(tentacleResult).toMatchObject({ answer: 'yes', resolvedRegionId: hospital.id });
+    expect(turf.booleanPointInPolygon(
+      [nearLimitHider.lng, nearLimitHider.lat],
+      constraintArea({ ...tentacle, answer: tentacleResult.answer!, regionId: tentacleResult.resolvedRegionId }),
+    )).toBe(true);
+  });
 });
 
 it('places partition pins inside every Supervisorial district and ZIP area', () => {

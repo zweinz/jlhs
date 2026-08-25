@@ -87,21 +87,24 @@ export function solveHiderQuestion(constraint: Constraint, hider: Position, regi
       return yesNoAnswer(yes);
     }
     if (category === 'supervisor-district') {
-      const seekerDistrict = districtAt(constraint.origin)?.properties.name;
-      const hiderDistrict = districtAt(hider)?.properties.name;
-      const yes = seekerDistrict === hiderDistrict;
+      const seekerDistrict = districtAt(constraint.origin);
+      const hiderDistrict = districtAt(hider);
+      if (!seekerDistrict || !hiderDistrict) return nullAnswer();
+      const yes = seekerDistrict.properties.name === hiderDistrict.properties.name;
       return yesNoAnswer(yes);
     }
     if (category === 'landmass') {
-      const seekerLandmass = landmassAt(constraint.origin)?.properties.name;
-      const hiderLandmass = landmassAt(hider)?.properties.name;
-      const yes = seekerLandmass === hiderLandmass;
+      const seekerLandmass = landmassAt(constraint.origin);
+      const hiderLandmass = landmassAt(hider);
+      if (!seekerLandmass || !hiderLandmass) return nullAnswer();
+      const yes = seekerLandmass.properties.name === hiderLandmass.properties.name;
       return yesNoAnswer(yes);
     }
     if (category === 'zip-code') {
-      const seekerZip = zipCodeAt(constraint.origin)?.properties.name;
-      const hiderZip = zipCodeAt(hider)?.properties.name;
-      const yes = seekerZip === hiderZip;
+      const seekerZip = zipCodeAt(constraint.origin);
+      const hiderZip = zipCodeAt(hider);
+      if (!seekerZip || !hiderZip) return nullAnswer();
+      const yes = seekerZip.properties.name === hiderZip.properties.name;
       return yesNoAnswer(yes);
     }
     const seekerNearest = nearestPoi(category, constraint.origin);
