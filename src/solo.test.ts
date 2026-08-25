@@ -89,6 +89,26 @@ describe('Google transit request boundaries', () => {
       { lat: 37.77, lng: -122.44 }, { lat: 37.78, lng: -122.43 }, '2026-08-24T19:00:00.000Z',
     )).resolves.toBeNull();
   });
+
+  it('reports quota exhaustion instead of claiming no stations are reachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([{
+      destinationIndex: 0,
+      status: { code: 8, message: 'Quota exceeded.' },
+      condition: 'ROUTE_NOT_FOUND',
+    }])));
+    await expect(reachableStations(
+      { lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z',
+    )).rejects.toThrow(/daily limit has been reached/i);
+  });
+
+  it('includes Google error details for malformed matrix requests', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      error: { message: 'Request field is invalid.' },
+    }, { status: 400 })));
+    await expect(reachableStations(
+      { lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z',
+    )).rejects.toThrow(/400.*Request field is invalid/i);
+  });
 });
 
 describe('Solo token and commitment security', () => {

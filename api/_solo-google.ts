@@ -65,13 +65,38 @@ async function routeMatrix(origin: Position, destinations: Position[], departure
       departureTime,
     }),
   });
-  if (!response.ok) throw new Error(`Google Routes matrix failed (${response.status}).`);
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const body = await response.json() as { error?: { message?: string } };
+      detail = body.error?.message?.replace(/\s+/g, ' ').trim().slice(0, 240) ?? '';
+    } catch {
+      // Google did not return its usual JSON error envelope.
+    }
+    throw new Error(`Google Routes matrix failed (${response.status})${detail ? `: ${detail}` : ''}.`);
+  }
   return response.json() as Promise<MatrixElement[]>;
+}
+
+function matrixServiceError(elements: MatrixElement[]) {
+  const failures = elements.filter((element) => element.status?.code);
+  const hasUsableElement = elements.some((element) =>
+    !element.status?.code && element.condition !== 'ROUTE_NOT_FOUND' && Number.isFinite(parseSeconds(element.duration)),
+  );
+  if (hasUsableElement || failures.length === 0) return null;
+  const code = failures[0].status?.code;
+  if (code === 8) {
+    return new Error('The Google Routes daily limit has been reached. Resume an existing Solo game or try again after midnight Pacific time.');
+  }
+  const detail = failures[0].status?.message?.replace(/\s+/g, ' ').trim().slice(0, 240);
+  return new Error(`Google Routes could not calculate station travel times${detail ? `: ${detail}` : ` (status ${code})`}.`);
 }
 
 export async function reachableStations(origin: Position, departureTime: string) {
   const stationBatches = chunk(validStations, 100);
   const matrices = await Promise.all(stationBatches.map((batch) => routeMatrix(origin, batch, departureTime)));
+  const serviceError = matrixServiceError(matrices.flat());
+  if (serviceError) throw serviceError;
   return matrices.flatMap((elements, batchIndex) => elements.flatMap((element) => {
     const localIndex = element.destinationIndex;
     if (localIndex === undefined || element.status?.code || element.condition === 'ROUTE_NOT_FOUND') return [];
