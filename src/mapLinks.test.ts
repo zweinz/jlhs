@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import resolveMapLink from '../api/resolve-map-link';
+import resolveMapLink, { parseCoordinatesFromGoogleMapsEmbed } from '../api/resolve-map-link';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, isGoogleMapsUrl, parseCoordinatesFromGoogleMapsUrl, parsePlaceQueryFromGoogleMapsUrl } from './mapLinks';
 
 describe('Google Maps link coordinates', () => {
@@ -44,6 +44,13 @@ describe('Google Maps link coordinates', () => {
 });
 
 describe('map-link resolver API', () => {
+  it('extracts the selected entity rather than the embed viewport center', () => {
+    expect(parseCoordinatesFromGoogleMapsEmbed(`
+      initEmbed([[[3153,-122.29718705,37.89373575]],
+      ["0x8085808f25cd1bd5:0x34b94a302fabe73e","Union Square Building, San Francisco, CA 94102",[37.7872114,-122.4079241]]]);
+    `)).toEqual({ lat: 37.7872114, lng: -122.4079241 });
+  });
+
   it('returns a direct coordinate without a network hop', async () => {
     const source = 'https://maps.google.com/?q=37.787994,-122.407437';
     const response = await resolveMapLink(
@@ -102,6 +109,35 @@ describe('map-link resolver API', () => {
     expect(fetchMock.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({ hostname: 'geocoding.geo.census.gov' }),
     );
+    fetchMock.mockRestore();
+  });
+
+  it('resolves a named Google feature through the public embed fallback', async () => {
+    const source = 'https://maps.app.goo.gl/apJy7Ugx8gJ8a9jH6?g_st=ic';
+    const redirected = 'https://maps.google.com?q=Union+Square+Building,+San+Francisco,+CA+94102&ftid=0x8085808f25cd1bd5:0x34b94a302fabe73e&entry=gps';
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: redirected } }))
+      .mockResolvedValueOnce(Response.json({ result: { addressMatches: [] } }))
+      .mockResolvedValueOnce(new Response(null, { status: 301, headers: { location: 'https://www.google.com/maps/embed?pb=selected-place' } }))
+      .mockResolvedValueOnce(new Response(`
+        initEmbed(["viewport",-122.29718705,37.89373575,
+        ["0x8085808f25cd1bd5:0x34b94a302fabe73e","Union Square Building, San Francisco, CA 94102",[37.7872114,-122.4079241]]]);
+      `));
+    const response = await resolveMapLink(
+      new Request(`https://jlhs.vercel.app/api/resolve-map-link?url=${encodeURIComponent(source)}`),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ position: { lat: 37.7872114, lng: -122.4079241 } });
+    expect(fetchMock.mock.calls[2]?.[0]).toEqual(expect.objectContaining({
+      pathname: '/maps',
+      searchParams: expect.objectContaining({}),
+    }));
+    expect((fetchMock.mock.calls[2]?.[0] as URL).searchParams.get('output')).toBe('embed');
+    expect(fetchMock.mock.calls[3]?.[0]).toEqual(expect.objectContaining({
+      hostname: 'www.google.com',
+      pathname: '/maps/embed',
+    }));
     fetchMock.mockRestore();
   });
 });
