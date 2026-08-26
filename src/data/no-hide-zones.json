@@ -1,0 +1,56 @@
+{
+  "type": "FeatureCollection",
+  "provenance": {
+    "sourceUrl": "https://docs.google.com/document/d/1Rnt223pfOT_X3p_01tq1NA5J-WU1e6Eua4KbnDvQd30/edit?tab=t.0",
+    "method": "Approximate polygons extrapolated from the hand-drawn blackout regions on the document's SF transit map",
+    "reviewed": "2026-08-25",
+    "bufferFeet": 300
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "no-hide-tenderloin-civic-center",
+        "name": "Tenderloin / Civic Center",
+        "boundary": "Approx. Geary to Golden Gate/Turk, Franklin/Van Ness to Powell/5th"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-122.42268, 37.78730], [-122.40835, 37.78729], [-122.41269, 37.78078],
+          [-122.42125, 37.78005], [-122.42268, 37.78730]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "no-hide-central-soma",
+        "name": "Central SoMa",
+        "boundary": "Approx. Market/5th, 4th-5th/Brannan, 8th-10th/Division, 10th-11th/Market"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-122.40941, 37.78174], [-122.40114, 37.77646], [-122.40896, 37.77137],
+          [-122.41495, 37.77647], [-122.40941, 37.78174]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "no-hide-southeast-sf",
+        "name": "Southeast SF",
+        "boundary": "Approx. east of US-101/Bayshore and south of Cesar Chavez to the southeastern city boundary"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-122.40900, 37.74950], [-122.35000, 37.74950], [-122.35000, 37.70000],
+          [-122.40900, 37.70000], [-122.40900, 37.74950]
+        ]]
+      }
+    }
+  ]
+}

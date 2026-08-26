@@ -21,6 +21,7 @@ import {
   MATCHING_SUBJECTS,
   MEASURING_SUBJECTS,
   PHOTO_SUBJECTS,
+  SF_MATCHING_SUBJECTS,
   selectableSubjects,
   type RulebookSubject,
 } from './rulebook';
@@ -38,6 +39,12 @@ import {
   zipCodeAt,
 } from './rulebookGeometry';
 import { decodeState, encodeState } from './share';
+import {
+  allowedHidingArea,
+  bufferedNoHideZones,
+  isHidingPositionAllowed,
+  noHideZoneProvenance,
+} from './noHideZones';
 import {
   canonicalQuestionKey,
   cardsForQuestion,
@@ -76,7 +83,7 @@ import {
   transitRoutes,
   validStations,
 } from './transit';
-import type { AreaDisplayMode, Constraint, Eligibility, Position, QuestionKind, SharedState, TransitScope } from './types';
+import type { Area, AreaDisplayMode, Constraint, Eligibility, Position, QuestionKind, SharedState, TransitScope } from './types';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import './style.css';
 
@@ -94,6 +101,7 @@ const initialLayers = {
   'sticky-map': true,
   'supervisor-districts': false,
   'zip-codes': false,
+  'no-hide-zones': false,
   landmasses: false,
   'partition-pins': true,
 };
@@ -154,7 +162,7 @@ function showMapLinkCard(
   infoWindow.open({ map });
 }
 const measuringChoices = selectableSubjects(MEASURING_SUBJECTS);
-const matchingChoices = selectableSubjects(MATCHING_SUBJECTS);
+const matchingChoices = SF_MATCHING_SUBJECTS;
 const photoChoices = selectableSubjects(PHOTO_SUBJECTS);
 const soloPhotoChoices: RulebookSubject[] = SOLO_PHOTO_SUBJECTS.map((subject) => ({
   ...subject,
@@ -456,11 +464,19 @@ export default function App() {
     [scopedRouteIds, scopedStationIds, state.routeStatuses, state.stationStatuses],
   );
   const questionEligibleIds = useMemo(
-    () => stationIdsMatchingTransitQuestions(statusEligibleIds, state.constraints),
+    () => stationIdsMatchingTransitQuestions(statusEligibleIds, state.constraints).filter((id) => {
+      const station = validStations.find((candidate) => candidate.id === id);
+      return !!station && isHidingPositionAllowed(station);
+    }),
     [state.constraints, statusEligibleIds],
   );
   const feasible = useMemo(
-    () => combineConstraints(state.constraints, regions),
+    () => {
+      const questionArea = combineConstraints(state.constraints, regions);
+      return (turf.intersect(turf.featureCollection([questionArea, allowedHidingArea])) as Area | null) ?? ({
+        type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [] },
+      } satisfies Area);
+    },
     [regions, state.constraints],
   );
   const excluded = useMemo(() => excludedArea(feasible), [feasible]);
@@ -744,18 +760,19 @@ export default function App() {
       });
     }
     const geographicPartitions = [
-      { key: 'supervisor-districts', collection: supervisorDistricts, offset: 15 },
-      { key: 'zip-codes', collection: zipCodeAreas, offset: 210 },
-      { key: 'landmasses', collection: sfLandmasses, offset: 35 },
+      { key: 'supervisor-districts', collection: supervisorDistricts, offset: 15, kind: 'geographic-region', showPins: true },
+      { key: 'zip-codes', collection: zipCodeAreas, offset: 210, kind: 'geographic-region', showPins: true },
+      { key: 'landmasses', collection: sfLandmasses, offset: 35, kind: 'geographic-region', showPins: true },
+      { key: 'no-hide-zones', collection: bufferedNoHideZones, offset: 0, kind: 'no-hide-region', showPins: false },
     ];
-    geographicPartitions.filter(({ key }) => state.layers[key]).forEach(({ collection, offset }) => {
+    geographicPartitions.filter(({ key }) => state.layers[key]).forEach(({ collection, offset, kind, showPins }) => {
       collection.features.forEach((feature, index) => {
-        const color = partitionColor(index, collection.features.length, offset);
+        const color = kind === 'no-hide-region' ? '#111827' : partitionColor(index, collection.features.length, offset);
         data.addGeoJson({
           ...feature,
-          properties: { ...feature.properties, kind: 'geographic-region', color, areaName: feature.properties.name },
+          properties: { ...feature.properties, kind, color, areaName: feature.properties.name },
         });
-        if (state.layers['partition-pins'] !== false) {
+        if (showPins && state.layers['partition-pins'] !== false) {
           const labelPosition = partitionLabelPosition(feature);
           data.addGeoJson({
             type: 'Feature',
@@ -840,6 +857,7 @@ export default function App() {
       const eligible = eligibilityValue !== false;
       if (kind === 'feasible') return { fillColor: '#16a34a', fillOpacity: 0.28, strokeColor: '#166534', strokeWeight: 3, zIndex: 1 };
       if (kind === 'excluded') return { fillColor: '#dc2626', fillOpacity: 0.28, strokeColor: '#991b1b', strokeWeight: 2, zIndex: 1 };
+      if (kind === 'no-hide-region') return { fillColor: '#111827', fillOpacity: 0.42, strokeColor: '#020617', strokeOpacity: 0.9, strokeWeight: 3, zIndex: 7 };
       if (kind === 'hider-trace') return { strokeColor: '#e11d48', strokeOpacity: 0.95, strokeWeight: 5, zIndex: 20 };
       if (kind === 'trace-point') {
         const endpoint = feature.getProperty('endpoint');
@@ -1542,6 +1560,11 @@ export default function App() {
                 value={state.hiderMapUrl ?? ''}
                 onChange={(hiderMapUrl) => setState((current) => ({ ...current, hiderMapUrl }))}
                 onResolved={(hiderPosition) => {
+                  if (!isHidingPositionAllowed(hiderPosition)) {
+                    setState((current) => ({ ...current, hiderPosition: undefined }));
+                    setMessage('That pin is inside a no-hide zone. Choose another hiding position.');
+                    return;
+                  }
                   setState((current) => ({ ...current, hiderPosition }));
                   mapRef.current?.panTo(hiderPosition);
                 }}
@@ -1593,9 +1616,10 @@ export default function App() {
               <label className="toggle"><input type="checkbox" checked={!!state.layers['supervisor-districts']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'supervisor-districts': event.target.checked } }))} />Supervisorial districts D1–D11</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers['zip-codes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'zip-codes': event.target.checked } }))} />ZIP-code areas</label>
               <label className="toggle"><input type="checkbox" checked={!!state.layers.landmasses} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, landmasses: event.target.checked } }))} />SF landmasses</label>
+              <label className="toggle"><input type="checkbox" checked={!!state.layers['no-hide-zones']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'no-hide-zones': event.target.checked } }))} />No-hide zones</label>
               <label className="toggle"><input type="checkbox" checked={state.layers['partition-pins'] !== false} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'partition-pins': event.target.checked } }))} />Partition pins</label>
             </div>
-            <p className="helper">Partition pins label Supervisorial districts, ZIP areas, landmasses, and the selected POI partition. They can be hidden independently from the colored regions. ZIP codes are generalized delivery areas, not official administrative districts.</p>
+            <p className="helper">Partition pins label Supervisorial districts, ZIP areas, landmasses, and the selected POI partition; no-hide zones intentionally have no name pins. Pins can be hidden independently from the colored regions. ZIP codes are generalized delivery areas, not official administrative districts. No-hide zones include the effective {noHideZoneProvenance.bufferFeet}-foot safety buffer and apply to every game mode.</p>
           </details>
 
           <details className="panel">
@@ -1756,11 +1780,13 @@ export default function App() {
             <p className="source">Routes: <a href={transitProvenance.sourceUrl}>DataSF Muni Simple Routes</a> · scheduled station stops: <a href={stationRouteProvenance.sourceUrl}>SFMTA GTFS</a> · coastline: <a href={coastlineProvenance.sourceUrl}>DataSF SF Shoreline and Islands</a>.</p>
             <p className="source">Districts/water: <a href={rulebookAreaProvenance.districts.sourceUrl}>DataSF districts</a> / <a href={rulebookAreaProvenance.water.sourceUrl}>water bodies</a> · streets: <a href={streetProvenance.sourceUrl}>DataSF centerlines</a> · elevation: <a href={elevationProvenance.sourceUrl}>Mapzen terrain tiles</a>.</p>
             <p className="source">ZIP areas: <a href={rulebookAreaProvenance.zipCodes.sourceUrl}>DataSF San Francisco ZIP Codes</a> · {zipCodeAreas.features.length} merged regions.</p>
+            <p className="source">No-hide zones: <a href={noHideZoneProvenance.sourceUrl}>SF game document blackout map</a> · three approximate regions buffered by {noHideZoneProvenance.bufferFeet} feet.</p>
             <p className="source">Interactive map coverage includes all in-play SF matching and measuring subjects. Approximate cards are labeled in their question notes. Photo cards are retained as reference because they do not determine a polygon. The map does not certify a final hiding spot: players must still confirm it is publicly accessible during game hours, safe, and within 10 feet of a marked path/road that the map app will use for walking directions.</p>
             {([['Matching', MATCHING_SUBJECTS], ['Measuring', MEASURING_SUBJECTS], ['Photos', PHOTO_SUBJECTS]] as const).map(([group, subjects]) => <details className="coverage-group" key={group}><summary>{group} deck audit · {subjects.filter((subject) => subject.status === 'in-play').length} in play</summary>{subjects.map((subject) => <p key={subject.id}><b>{subject.label}</b> · {subject.status === 'out-of-play' ? 'out of SF deck' : subject.support}</p>)}</details>)}
             {state.layers['supervisor-districts'] && supervisorDistricts.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, supervisorDistricts.features.length, 15) }} /><span>{feature.properties.name}</span><small>DataSF</small></div>)}
             {state.layers['zip-codes'] && zipCodeAreas.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, zipCodeAreas.features.length, 210) }} /><span>{feature.properties.name}</span><small>ZIP</small></div>)}
             {state.layers.landmasses && sfLandmasses.features.map((feature, index) => <div className="legend" key={feature.properties.id}><i style={{ background: partitionColor(index, sfLandmasses.features.length, 35) }} /><span>{feature.properties.name}</span><small>SF rule</small></div>)}
+            {state.layers['no-hide-zones'] && <div className="legend"><i style={{ background: '#111827' }} /><span>No-hide zones</span><small>All games</small></div>}
           </details>
         </aside>
         <section className={`map-wrap${state.layers['sticky-map'] !== false && !traceScreenshot ? ' sticky-map' : ''}${traceScreenshot ? ' trace-screenshot' : ''}`} aria-label={traceScreenshot ? 'Trace-only screenshot view' : 'San Francisco feasible area map'}>

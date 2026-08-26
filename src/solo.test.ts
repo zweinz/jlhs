@@ -25,6 +25,7 @@ import {
   vetoedSoloConstraint,
 } from './solo';
 import { primaryTransitStationIds, validStations } from './transit';
+import { isHidingPositionAllowed } from './noHideZones';
 import { createDeck } from './cards';
 import type { SharedState } from './types';
 import { publicCardState } from '../api/_solo-cards';
@@ -198,7 +199,7 @@ describe('Google transit request boundaries', () => {
   beforeEach(() => { (globalThis as unknown as { process: { env: Record<string, string> } }).process.env.GOOGLE_MAPS_SERVER_API_KEY = 'test-key'; });
   afterEach(() => vi.unstubAllGlobals());
 
-  it('splits the 193 station pool into 100 and 93 destinations and enforces 30 minutes', async () => {
+  it('batches the safety-filtered station pool and enforces 30 minutes', async () => {
     const destinationCounts: number[] = [];
     const requestUrls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
@@ -213,13 +214,10 @@ describe('Google transit request boundaries', () => {
       })));
     }));
     const reachable = await reachableStations({ lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z');
-    expect(destinationCounts).toEqual([100, 93]);
-    expect(requestUrls).toEqual([
-      'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix',
-      'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix',
-    ]);
-    expect(reachable).toHaveLength(2);
-    expect(chunk(Array.from({ length: 193 }), 100).map((part) => part.length)).toEqual([100, 93]);
+    const expectedBatches = chunk(validStations.filter(isHidingPositionAllowed), 100).map((part) => part.length);
+    expect(destinationCounts).toEqual(expectedBatches);
+    expect(requestUrls).toEqual(expectedBatches.map(() => 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix'));
+    expect(reachable).toHaveLength(expectedBatches.length);
   });
 
   it('uses the configured hiding time as the transit cutoff', async () => {
@@ -311,7 +309,8 @@ describe('Google transit request boundaries', () => {
     await reachableStations(
       { lat: 37.77, lng: -122.44 }, '2026-08-24T19:00:00.000Z', 'primary',
     );
-    expect(destinationCounts).toEqual([primaryTransitStationIds.length]);
+    expect(destinationCounts).toEqual([validStations.filter((station) =>
+      primaryTransitStationIds.includes(station.id) && isHidingPositionAllowed(station)).length]);
     expect(primaryTransitStationIds.length).toBeLessThan(validStations.length);
   });
 
@@ -558,7 +557,7 @@ describe('Solo token and card-session security', () => {
 
   it('moves the hider only after Distant Cuisine is accepted and increments the position revision', async () => {
     const value = session();
-    const destination = { lat: 37.781, lng: -122.421 };
+    const destination = { lat: 37.7795, lng: -122.44 };
     value.activeEffects = [{
       id: 'cuisine', cardId: 'distant-cuisine', cardInstance: 'distant-cuisine#1', name: 'Curse of the Distant Cuisine',
       description: 'Visit qualifying cuisine.', status: 'pending', startedQuestion: 1, blocksQuestions: true, blocksTransit: false,
@@ -575,6 +574,22 @@ describe('Solo token and card-session security', () => {
     expect(updated.spot).toEqual(destination);
     expect(updated.panorama.id).toBe('restaurant-pano');
     expect(body.cardState.positionRevision).toBe(1);
+  });
+
+  it('rejects a Distant Cuisine move into a no-hide zone', async () => {
+    const value = session();
+    value.activeEffects = [{
+      id: 'unsafe-cuisine', cardId: 'distant-cuisine', cardInstance: 'distant-cuisine#1', name: 'Curse of the Distant Cuisine',
+      description: 'Visit qualifying cuisine.', status: 'pending', startedQuestion: 1, blocksQuestions: true, blocksTransit: false,
+      proposedPosition: { lat: 37.776, lng: -122.408 }, proposedPanorama: { id: 'unsafe-pano' },
+      completionInstruction: 'Visit a qualifying restaurant.',
+    }];
+    const response = await cardEventHandler(new Request('https://example.test/api/solo/card-event', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), event: { type: 'accept-pending', effectId: 'unsafe-cuisine' } }),
+    }));
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(/no-hide zone/i);
   });
 
   it('enforces both ten-minute Hidden Hangman waits', async () => {
@@ -618,6 +633,7 @@ describe('Solo token and card-session security', () => {
     }, value);
     expect(matching.length).toBeGreaterThan(5);
     expect(matching.some((candidate) => candidate.category === 'transit-route')).toBe(false);
+    expect(matching.some((candidate) => candidate.category === 'zip-code')).toBe(true);
     expect(matching.every((candidate) => candidate.kind === 'matching-region' && candidate.category !== 'museum')).toBe(true);
 
     value.blockedQuestionKeys = [canonicalQuestionKey(matching[0])];

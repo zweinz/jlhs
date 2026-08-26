@@ -2,8 +2,9 @@ import { SF_BOUNDS } from '../../src/data';
 import { TENTACLE_CATEGORIES } from '../../src/data';
 import { solveHiderQuestion } from '../../src/hider';
 import { QUESTION_DEFINITIONS, RULEBOOK_DISTANCE_CHOICES } from '../../src/questions';
-import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, selectableSubjects } from '../../src/rulebook';
+import { MEASURING_SUBJECTS, SF_MATCHING_SUBJECTS, selectableSubjects } from '../../src/rulebook';
 import { nearestStreetOrientation } from '../../src/rulebookGeometry';
+import { isHidingPositionAllowed } from '../../src/noHideZones';
 import { canonicalQuestionKey, cardsForQuestion, distanceMeters, keptCardsForQuestion, publicSoloDisplayText, soloPhotoPlan, SOLO_PHOTO_SUBJECTS, type AnySoloPhotoKind } from '../../src/solo';
 import type { Constraint, Position, QuestionKind } from '../../src/types';
 import { panoramaAt, photoTargetInZone } from '../_solo-google';
@@ -48,7 +49,7 @@ export function randomizeCandidates(constraint: Constraint, session: SecretSoloS
       ...constraint, category: subject.id, name: `${QUESTION_DEFINITIONS.measuring.label} · ${subject.label}`,
     }));
   } else if (constraint.kind === 'matching-region') {
-    values = selectableSubjects(MATCHING_SUBJECTS)
+    values = SF_MATCHING_SUBJECTS
       .filter((subject) => subject.id !== constraint.category && (subject.id !== 'transit-route' || constraint.category === 'transit-route'))
       .map((subject) => ({
         ...constraint, category: subject.id, regionId: subject.id === 'transit-route' ? constraint.regionId : undefined,
@@ -294,16 +295,17 @@ export default async function handler(request: Request) {
         if (result.played && (playedId === 'distant-cuisine' || playedId === 'mediocre-travel-agent')) {
           const center = playedId === 'distant-cuisine' ? session.station.position : session.lastSeekerPosition!;
           const place = await groundedPlace(session, playedId, center);
-          const distantPanorama = place && playedId === 'distant-cuisine' ? await panoramaAt(place.position) : undefined;
+          const safePlace = place && (playedId !== 'distant-cuisine' || isHidingPositionAllowed(place.position)) ? place : undefined;
+          const distantPanorama = safePlace && playedId === 'distant-cuisine' ? await panoramaAt(safePlace.position) : undefined;
           const effect = session.activeEffects?.find((candidate) => candidate.cardInstance === selected);
-          if (effect && place && (playedId !== 'distant-cuisine' || distantPanorama)) {
-            effect.placeName = place.name;
-            effect.proposedPosition = place.position;
+          if (effect && safePlace && (playedId !== 'distant-cuisine' || (distantPanorama && isHidingPositionAllowed(distantPanorama.position)))) {
+            effect.placeName = safePlace.name;
+            effect.proposedPosition = safePlace.position;
             effect.proposedPanorama = distantPanorama ? { id: distantPanorama.id, date: distantPanorama.date } : undefined;
-            effect.citationUrl = place.citationUrl;
+            effect.citationUrl = safePlace.citationUrl;
             effect.detail = playedId === 'distant-cuisine'
-              ? `Hider restaurant: ${place.name}. Cuisine country: ${place.country}. Seekers need a restaurant whose country is at least as far from San Francisco.`
-              : `Vacation destination: ${place.name}. Stay at least five minutes, send three photos, and obtain a souvenir.`;
+              ? `Hider restaurant: ${safePlace.name}. Cuisine country: ${safePlace.country}. Seekers need a restaurant whose country is at least as far from San Francisco.`
+              : `Vacation destination: ${safePlace.name}. Stay at least five minutes, send three photos, and obtain a souvenir.`;
           } else if (effect) {
             session.activeEffects = session.activeEffects?.filter((candidate) => candidate.id !== effect.id);
             session.deck.usedPile = session.deck.usedPile.filter((instance) => instance !== effect.cardInstance);

@@ -1,6 +1,7 @@
 import * as turf from '@turf/turf';
 import { pois, SF_BOUNDS } from '../src/data';
 import { nearbyStationCount, stationDifficulty } from '../src/solo';
+import { isHidingPositionAllowed } from '../src/noHideZones';
 import { primaryTransitStationIds, validStations } from '../src/transit';
 import type { Position, TransitScope } from '../src/types';
 import type { SecretSoloSession } from './_solo-session';
@@ -108,9 +109,10 @@ export async function reachableStations(
   maxDurationSeconds = 1800,
 ) {
   const primaryIds = new Set(primaryTransitStationIds);
-  const stationPool = transitScope === 'primary'
+  const scopedStationPool = transitScope === 'primary'
     ? validStations.filter((station) => primaryIds.has(station.id))
     : validStations;
+  const stationPool = scopedStationPool.filter(isHidingPositionAllowed);
   const stationBatches = chunk(stationPool, 100);
   const matrices: Array<{ stations: typeof validStations; elements: MatrixElement[] }> = [];
   const requestErrors: Error[] = [];
@@ -367,10 +369,11 @@ export async function photoTargetInZone(
 }
 
 export async function panoramasInZone(station: Position, stationZoneMiles = 0.25) {
-  const results = await Promise.all(candidatePoints(station, stationZoneMiles).map((position) => panoramaAt(position)));
+  const results = await Promise.all(candidatePoints(station, stationZoneMiles).map((position) =>
+    isHidingPositionAllowed(position) ? panoramaAt(position) : null));
   const byId = new Map<string, NonNullable<(typeof results)[number]>>();
   results.forEach((panorama) => {
-    if (!panorama) return;
+    if (!panorama || !isHidingPositionAllowed(panorama.position)) return;
     const miles = turf.distance([station.lng, station.lat], [panorama.position.lng, panorama.position.lat], { units: 'miles' });
     if (miles <= stationZoneMiles) byId.set(panorama.id, panorama);
   });

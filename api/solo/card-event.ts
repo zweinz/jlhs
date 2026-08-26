@@ -1,6 +1,7 @@
 import { CARD_CATALOG } from '../../src/cards';
 import { addDecision, publicCardState, reconcileCardEffects } from '../_solo-cards';
 import { jsonError, readJson, seal, unseal, type SecretSoloSession } from '../_solo-session';
+import { isHidingPositionAllowed } from '../../src/noHideZones';
 
 export const config = { runtime: 'edge' };
 
@@ -25,6 +26,7 @@ export default async function handler(request: Request) {
     if (body.event.type === 'accept-pending') {
       if (effect.status !== 'pending') return jsonError('That curse is not awaiting confirmation.', 409);
       if (effect.cardId === 'distant-cuisine' && (!effect.proposedPosition || !effect.proposedPanorama)) return jsonError('Distant Cuisine has no validated restaurant location.', 409);
+      if (effect.cardId === 'distant-cuisine' && effect.proposedPosition && !isHidingPositionAllowed(effect.proposedPosition)) return jsonError('Distant Cuisine cannot move the hider into a no-hide zone.', 409);
       if (effect.cardId === 'mediocre-travel-agent' && !effect.proposedPosition) return jsonError('Mediocre Travel Agent has no validated destination.', 409);
       if (effect.cardId === 'unguided-tourist' && !effect.imageUrl) return jsonError('Unguided Tourist has no validated Street View scene.', 409);
       effect.status = 'active';

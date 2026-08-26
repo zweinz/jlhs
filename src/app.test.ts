@@ -6,10 +6,11 @@ import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from '
 import { combineConstraints, constraintArea, excludedArea, partition, partitionLabelPosition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer, solveHiderQuestion } from './hider';
 import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, RULEBOOK_DISTANCE_CHOICES } from './questions';
-import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, selectableSubjects } from './rulebook';
+import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, SF_MATCHING_SUBJECTS, selectableSubjects } from './rulebook';
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestStreetOrientation, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import { decodeState, encodeState, validateState } from './share';
+import { allowedHidingArea, bufferedNoHideZones, isHidingPositionAllowed, noHideZoneProvenance } from './noHideZones';
 import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, routesForStation, shouldDisplayStationZone, stationIdsMatchingTransitQuestions, stationRouteProvenance, transitRouteLabel, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
 
@@ -38,6 +39,27 @@ describe('SF normalization', () => {
     expect(pois.filter((poi) => poi.category === 'museum')).toHaveLength(49);
     expect(pois.filter((poi) => poi.category === 'library')).toHaveLength(29);
     expect(validStations).toHaveLength(193);
+  });
+});
+
+describe('No-hide zones', () => {
+  it('loads three buffered document-derived regions and excludes their representative points', () => {
+    expect(bufferedNoHideZones.features).toHaveLength(3);
+    expect(noHideZoneProvenance).toMatchObject({ bufferFeet: 300, reviewed: '2026-08-25' });
+    expect(isHidingPositionAllowed({ lat: 37.784, lng: -122.415 })).toBe(false);
+    expect(isHidingPositionAllowed({ lat: 37.776, lng: -122.408 })).toBe(false);
+    expect(isHidingPositionAllowed({ lat: 37.74, lng: -122.39 })).toBe(false);
+    expect(isHidingPositionAllowed({ lat: 37.76, lng: -122.49 })).toBe(true);
+  });
+
+  it('keeps every no-hide label and boundary description available to the map layer', () => {
+    expect(bufferedNoHideZones.features.every((feature) =>
+      feature.properties.id && feature.properties.name && feature.properties.boundary)).toBe(true);
+  });
+
+  it('removes no-hide points from the common allowed hiding area', () => {
+    expect(turf.booleanPointInPolygon([-122.415, 37.784], allowedHidingArea)).toBe(false);
+    expect(turf.booleanPointInPolygon([-122.49, 37.76], allowedHidingArea)).toBe(true);
   });
 });
 
@@ -107,6 +129,10 @@ describe('SF rulebook audit', () => {
     expect(MATCHING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('out-of-play');
     expect(MEASURING_SUBJECTS.find((subject) => subject.id === 'aquarium')?.status).toBe('in-play');
     expect(selectableSubjects(MEASURING_SUBJECTS).some((subject) => subject.id === 'sea-level')).toBe(true);
+    expect(SF_MATCHING_SUBJECTS).toContainEqual(expect.objectContaining({
+      id: 'zip-code', label: 'ZIP-code area', status: 'in-play', support: 'exact',
+    }));
+    expect(SF_MATCHING_SUBJECTS.find((subject) => subject.id === 'zip-code')?.notes.join(' ')).toMatch(/not official administrative divisions/i);
     expect([...MATCHING_SUBJECTS, ...MEASURING_SUBJECTS].filter((subject) => subject.status === 'in-play').every((subject) => subject.support !== 'not-mapped')).toBe(true);
   });
 

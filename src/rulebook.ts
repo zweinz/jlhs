@@ -86,5 +86,20 @@ export const PHOTO_SUBJECTS: RulebookSubject[] = [
 export const selectableSubjects = (subjects: RulebookSubject[]) =>
   subjects.filter((subject) => subject.status === 'in-play');
 
+export const SF_MATCHING_SUBJECTS: RulebookSubject[] = [
+  ...selectableSubjects(MATCHING_SUBJECTS),
+  {
+    id: 'zip-code',
+    label: 'ZIP-code area',
+    status: 'in-play',
+    support: 'exact',
+    notes: [
+      'SF map extension: compare the generalized ZIP-code delivery area containing each player’s pin.',
+      'ZIP codes are delivery areas, not official administrative divisions.',
+      'Uses 27 merged regions from the DataSF San Francisco ZIP Codes dataset.',
+    ],
+  },
+];
+
 export const subjectById = (subjects: RulebookSubject[], id?: string) =>
   subjects.find((subject) => subject.id === id);
