@@ -123,22 +123,6 @@ function jsonResponseFormat(schema: Record<string, unknown>) {
   return { type: 'text', mime_type: 'application/json', schema };
 }
 
-function mapsCitation(value: unknown): string | undefined {
-  if (typeof value === 'string' && /^https:\/\/(?:www\.)?(?:google\.[^/]+\/maps|maps\.google\.)/i.test(value)) return value;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = mapsCitation(item);
-      if (found) return found;
-    }
-  } else if (value && typeof value === 'object') {
-    for (const item of Object.values(value as Record<string, unknown>)) {
-      const found = mapsCitation(item);
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
 function trimContext(context: Record<string, unknown>) {
   const copy = structuredClone(context) as Record<string, unknown>;
   if (Array.isArray(copy.recentQuestions)) {
@@ -381,9 +365,12 @@ export async function groundedPlace(
     if (purpose === 'mediocre-travel-agent' && session.lastSeekerPosition &&
       meters(position, session.spot) <= meters(session.lastSeekerPosition, session.spot)) return undefined;
     if (purpose === 'distant-cuisine' && (typeof parsed.country !== 'string' || !parsed.country.trim())) return undefined;
+    const coordinates = `${position.lat},${position.lng}`;
     const place = {
       name: parsed.name.slice(0, 160), position,
-      citationUrl: mapsCitation(body) ?? (typeof parsed.citationUrl === 'string' ? parsed.citationUrl : undefined),
+      // The grounding response can contain citations for nearby alternatives.
+      // Link the exact structured point that passed our distance checks instead.
+      citationUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates)}`,
       country: typeof parsed.country === 'string' ? parsed.country.trim().slice(0, 80) : undefined,
     };
     session.groundedPlaces = [...(session.groundedPlaces ?? []), { purpose, center, ...place }].slice(-MAPS_CALL_LIMIT);

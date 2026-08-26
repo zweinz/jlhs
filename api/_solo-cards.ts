@@ -64,6 +64,9 @@ export function initializeCardSession(session: Omit<SecretSoloSession, 'deck' | 
     activeEffects: [],
     blockedQuestionKeys: [],
     bonusMinutes: 0,
+    totalPausedSeconds: 0,
+    pauseCount: 0,
+    publicEvidence: [],
     recentDecisions: [],
     publicMoves: [],
     positionRevision: 0,
@@ -88,7 +91,7 @@ function formatQuestionKey(key: string) {
 }
 
 export function reconcileCardEffects(session: SecretSoloSession) {
-  const now = Date.now();
+  const now = session.pausedAt ? Date.parse(session.pausedAt) : Date.now();
   session.activeEffects = (session.activeEffects ?? []).filter((effect) => !effect.expiresAt || Date.parse(effect.expiresAt) > now);
   if (!session.activeEffects.some((effect) => effect.cardId === 'spotty-memory')) session.spottyMemoryCategory = undefined;
   if (!session.activeEffects.some((effect) => effect.cardId === 'overflowing-chalice')) session.overflowingQuestionsRemaining = undefined;
@@ -107,6 +110,7 @@ export function publicCardState(session: SecretSoloSession): SoloPublicCardState
     failureBonusMinutes: effect.failureBonusMinutes,
     citationUrl: effect.citationUrl,
     placeName: effect.placeName,
+    placePosition: effect.proposedPosition,
     mazeSvg: effect.mazeSvg,
     hangmanPattern: effect.hangmanWord
       ? effect.hangmanWord.split('').map((letter) => effect.hangmanGuesses?.includes(letter) ? letter : '_').join(' ')
@@ -135,6 +139,8 @@ export function publicCardState(session: SecretSoloSession): SoloPublicCardState
     canCompleteTask: CARD_CATALOG[effect.cardId].resolution === 'task-then-persistent' && effect.status === 'active',
     canReportFailure: Boolean(effect.failureBonusMinutes && !effect.failureReported &&
       (CARD_CATALOG[effect.cardId].resolution !== 'task-then-persistent' || effect.status === 'monitoring')),
+    canVetoInfeasible: effect.status === 'active' &&
+      (CARD_CATALOG[effect.cardId].resolution === 'manual-clear' || CARD_CATALOG[effect.cardId].resolution === 'task-then-persistent'),
   }));
   const handCards = [...session.deck.hand.reduce((grouped, instance) => {
     const card = cardForInstance(instance);
@@ -154,7 +160,10 @@ export function publicCardState(session: SecretSoloSession): SoloPublicCardState
     discardCount: session.deck.discardPile.length,
     usedCount: session.deck.usedPile.length,
     activeCurses: effects,
-    playHistory: (session.recentDecisions ?? []).slice(-20),
+    playHistory: (session.recentDecisions ?? []).filter((decision) =>
+      !decision.startsWith('[private] ') &&
+      !/Xeno played (?:Duplicate another card as )?Discard [12], draw [23]\./i.test(decision),
+    ).slice(-20),
     moves: session.publicMoves ?? [],
     positionRevision: session.positionRevision ?? 0,
     questionBlocked: effects.some((effect) => effect.blocksQuestions),
@@ -170,6 +179,7 @@ export function publicCardState(session: SecretSoloSession): SoloPublicCardState
       available: Boolean(process.env.GEMINI_API_KEY) && !persistentFallback,
     },
     bonusMinutes: session.bonusMinutes ?? 0,
+    evidence: session.publicEvidence ?? [],
   };
 }
 
@@ -321,8 +331,10 @@ function hangmanWord(session: SecretSoloSession) {
   return HANGMAN_WORDS[seed % HANGMAN_WORDS.length];
 }
 
+export const SOLO_MAZE_SIZE = 21;
+
 export function deterministicMazeSvg(seedText: string) {
-  const size = 9;
+  const size = SOLO_MAZE_SIZE;
   let seed = [...seedText].reduce((value, character) => (value * 33 + character.charCodeAt(0)) >>> 0, 2166136261);
   const random = () => { seed = (1664525 * seed + 1013904223) >>> 0; return seed / 0x1_0000_0000; };
   const visited = Array.from({ length: size }, () => Array(size).fill(false));
@@ -340,7 +352,7 @@ export function deterministicMazeSvg(seedText: string) {
     visited[ny][nx] = true;
     stack.push([nx, ny]);
   }
-  const cell = 20;
+  const cell = 14;
   const lines: string[] = [];
   for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
     if (y === 0 && x !== 0) lines.push(`<path d="M${x * cell} ${y * cell}h${cell}"/>`);
@@ -348,7 +360,8 @@ export function deterministicMazeSvg(seedText: string) {
     if (!openings.has(`${x},${y}:${x + 1},${y}`)) lines.push(`<path d="M${(x + 1) * cell} ${y * cell}v${cell}"/>`);
     if (!openings.has(`${x},${y}:${x},${y + 1}`) && !(y === size - 1 && x === size - 1)) lines.push(`<path d="M${x * cell} ${(y + 1) * cell}h${cell}"/>`);
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size * cell} ${size * cell}" role="img" aria-label="Solvable maze"><rect width="100%" height="100%" fill="white"/><g fill="none" stroke="#17222d" stroke-width="2">${lines.join('')}</g><text x="4" y="15" font-size="10">START</text><text x="${size * cell - 34}" y="${size * cell - 5}" font-size="10">END</text></svg>`;
+  const extent = size * cell;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${extent}" height="${extent}" viewBox="0 0 ${extent} ${extent}" role="img" aria-label="Challenging ${size} by ${size} solvable maze"><rect width="100%" height="100%" fill="white"/><g fill="none" stroke="#17222d" stroke-width="1.4">${lines.join('')}</g><text x="2" y="9" font-size="7" font-weight="700">START</text><text x="${extent - 19}" y="${extent - 3}" font-size="7" font-weight="700">END</text></svg>`;
 }
 
 function randomizedSoloCurseDetail(cardId: CardId, random: () => number) {
@@ -450,6 +463,7 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
   const castingNote = castingDiscarded.length ? ` Discarded ${publicCardNames(castingDiscarded).join(', ')} to pay the casting cost.` : '';
 
   if (card.kind === 'powerup') {
+    const privateHandManagement = card.id === 'discard-1-draw-2' || card.id === 'discard-2-draw-3';
     let detail = '';
     if (card.id === 'expand-hand') {
       session.deck.maxHandSize += 1;
@@ -470,8 +484,8 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
       if (overflow.length) detail += ` Discarded ${publicCardNames(overflow).join(', ')} for hand overflow.`;
     }
     const announcement = `Xeno played ${copiedNote}.`;
-    addDecision(session, `${announcement}${detail}${castingNote}`);
-    return { played: true, announcement };
+    addDecision(session, `${privateHandManagement ? '[private] ' : ''}${announcement}${detail}${castingNote}`);
+    return { played: true, announcement: privateHandManagement ? undefined : announcement };
   }
 
   session.lastCurseQuestionNumber = session.questionNumber;

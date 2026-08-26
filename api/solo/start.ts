@@ -52,6 +52,7 @@ export default async function handler(request: Request) {
       version: 2,
       sessionId: crypto.randomUUID(),
       createdAt: now.toISOString(),
+      startPosition: body.origin!,
       expiresAt: new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString(),
       departureTime: departure.toISOString(),
       transitScope,
@@ -78,6 +79,10 @@ export default async function handler(request: Request) {
       stationZoneMiles: session.stationZoneMiles,
       phase: session.phase,
       departureTime: session.departureTime,
+      createdAt: session.createdAt,
+      startPosition: session.startPosition,
+      totalPausedSeconds: 0,
+      pauseCount: 0,
       cardState,
     }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {

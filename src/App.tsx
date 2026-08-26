@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as turf from '@turf/turf';
 import { setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
-import { combineConstraints, excludedArea, nearestPoi, partition, partitionLabelPosition, stationIdsOverlappingArea } from './geometry';
+import { combineConstraints, excludedArea, manualReachArea, nearestPoi, partition, partitionLabelPosition, questionPreviewArea, stationIdsOverlappingArea } from './geometry';
 import {
   CATEGORY_LABELS,
   PARTITION_CATEGORIES,
@@ -13,8 +13,9 @@ import {
   type PoiCategory,
 } from './data';
 import { hiderAnswer } from './hider';
-import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
+import { activeMapPartition, activePoiPartition, GEOGRAPHIC_PARTITIONS, selectMapPartition, VISIBLE_POI_PARTITIONS } from './layers';
 import { createLongPressController } from './longPress';
+import { persistManualReachBoundary, restoreManualReachBoundary } from './manualReachStorage';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
 import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, questionRequiresOrigin, questionRequiresTarget, RULEBOOK_DISTANCE_CHOICES } from './questions';
 import {
@@ -38,7 +39,7 @@ import {
   zipCodeAreas,
   zipCodeAt,
 } from './rulebookGeometry';
-import { decodeState, encodeState } from './share';
+import { decodeState, encodeState, shareableState } from './share';
 import {
   allowedHidingArea,
   bufferedNoHideZones,
@@ -49,6 +50,8 @@ import {
   canonicalQuestionKey,
   cardsForQuestion,
   defaultSfDateTime,
+  elapsedSoloSeconds,
+  formatElapsedTime,
   keptCardsForQuestion,
   normalizeQuestionUses,
   publicSoloDisplayText,
@@ -84,7 +87,7 @@ import {
   transitRoutes,
   validStations,
 } from './transit';
-import type { Area, AreaDisplayMode, Constraint, Eligibility, Position, QuestionKind, SharedState, TransitScope } from './types';
+import type { Area, AreaDisplayMode, Constraint, Eligibility, ManualReachRegion, Position, QuestionKind, SharedState, TransitScope } from './types';
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import './style.css';
 
@@ -113,7 +116,7 @@ const initial: SharedState = {
   viewport: { center: SF_CENTER, zoom: 12 },
   mode: 'seeker',
   stationZoneMiles: 0.25,
-  areaDisplayMode: 'allowed-green',
+  areaDisplayMode: 'excluded-red',
   transitScope: 'all',
   stationStatuses: {},
   routeStatuses: {},
@@ -175,6 +178,10 @@ const soloPhotoChoices: RulebookSubject[] = SOLO_PHOTO_SUBJECTS.map((subject) =>
 
 const SOLO_STORAGE_KEY = 'sf-hiding-area-solo-v3';
 
+function currentConfigKey() {
+  return new URLSearchParams(location.search).get('config') ?? '';
+}
+
 function restoredSolo(): SoloClientSession | undefined {
   try {
     const value = localStorage.getItem(SOLO_STORAGE_KEY);
@@ -215,9 +222,13 @@ function loadGoogleMaps(key: string) {
 function restoredState() {
   try {
     const payload = new URLSearchParams(location.search).get('config');
-    if (!payload) return initial;
-    const restored = decodeState(payload);
-    return { ...restored, layers: selectPoiPartition(restored.layers, activePoiPartition(restored.layers)) };
+    const restored = payload ? decodeState(payload) : initial;
+    const localBoundary = restoreManualReachBoundary(localStorage, payload ?? '');
+    return {
+      ...restored,
+      layers: selectMapPartition(restored.layers, activeMapPartition(restored.layers)),
+      ...(localBoundary.matched ? { manualReachBoundary: localBoundary.boundary } : {}),
+    };
   } catch {
     return initial;
   }
@@ -354,6 +365,80 @@ function MapLinkField({ label, value, onChange, onResolved, onMessage }: MapLink
   );
 }
 
+type CommitNumberInputProps = {
+  value: number | undefined;
+  min: number;
+  max: number;
+  step: number;
+  onCommit: (value: number) => void;
+  ariaLabel?: string;
+  integer?: boolean;
+  disabled?: boolean;
+};
+
+function CommitNumberInput({ value, min, max, step, onCommit, ariaLabel, integer, disabled }: CommitNumberInputProps) {
+  const [draft, setDraft] = useState(value === undefined ? '' : String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setDraft(value === undefined ? '' : String(value));
+  }, [editing, value]);
+  const commit = () => {
+    setEditing(false);
+    const parsed = Number(draft.trim());
+    if (!draft.trim() || !Number.isFinite(parsed)) {
+      setDraft(value === undefined ? '' : String(value));
+      return;
+    }
+    const next = Math.min(max, Math.max(min, integer ? Math.round(parsed) : parsed));
+    setDraft(String(next));
+    onCommit(next);
+  };
+  return <input
+    type="text"
+    inputMode={integer ? 'numeric' : 'decimal'}
+    aria-label={ariaLabel}
+    value={draft}
+    disabled={disabled}
+    onFocus={() => setEditing(true)}
+    onChange={(event) => setDraft(event.target.value)}
+    onBlur={commit}
+    onKeyDown={(event) => {
+      if (event.key === 'Enter') event.currentTarget.blur();
+      if (event.key === 'Escape') {
+        setDraft(value === undefined ? '' : String(value));
+        event.currentTarget.blur();
+      }
+    }}
+    data-min={min}
+    data-max={max}
+    data-step={step}
+  />;
+}
+
+function browserPosition() {
+  return new Promise<Position | undefined>((resolve) => {
+    if (!navigator.geolocation) {
+      resolve(undefined);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => resolve({ lat: coords.latitude, lng: coords.longitude }),
+      () => resolve(undefined),
+      { enableHighAccuracy: true, maximumAge: 15_000, timeout: 8_000 },
+    );
+  });
+}
+
+function keepMobileFieldVisible(element: HTMLElement) {
+  if (!window.matchMedia('(max-width: 819px)').matches) return;
+  const reveal = () => {
+    if (element.isConnected) element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+  };
+  requestAnimationFrame(reveal);
+  window.setTimeout(reveal, 280);
+  window.setTimeout(reveal, 650);
+}
+
 function answerOptions(kind: QuestionKind) {
   if (kind === 'thermometer') return ['warmer', 'colder'];
   if (kind === 'measuring') return ['closer', 'farther', 'null'];
@@ -393,6 +478,36 @@ function defaultAnswer(kind: QuestionKind): Constraint['answer'] {
   return 'yes';
 }
 
+function soloPreviewBranches(constraint: Constraint) {
+  if (constraint.kind === 'radar' || constraint.kind === 'matching-region') return [
+    { answer: 'yes' as const, label: 'Yes' },
+    { answer: 'no' as const, label: 'Inverse · No' },
+  ];
+  if (constraint.kind === 'thermometer') return [
+    { answer: 'warmer' as const, label: 'Hotter' },
+    { answer: 'colder' as const, label: 'Inverse · Colder' },
+  ];
+  if (constraint.kind === 'measuring' || constraint.kind === 'coastline') return [
+    { answer: 'closer' as const, label: 'Closer' },
+    { answer: 'farther' as const, label: 'Inverse · Further' },
+  ];
+  if (constraint.kind === 'tentacle') return [
+    { answer: 'yes' as const, label: 'Any named match' },
+    { answer: 'not-within-reach' as const, label: 'Inverse · none in reach' },
+  ];
+  if (constraint.kind === 'endgame-confirmation') return [
+    { answer: 'yes' as const, label: 'Yes zone' },
+    { answer: 'no' as const, label: 'Inverse · outside' },
+  ];
+  return [];
+}
+
+type SoloAnswerSheet = {
+  questionName: string;
+  record: SoloQuestionRecord;
+  fallbackMessage?: string;
+};
+
 export default function App() {
   const mapNode = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -402,6 +517,8 @@ export default function App() {
   const currentLocationLayerRef = useRef<google.maps.Data | null>(null);
   const currentLocationFeatureRef = useRef<google.maps.Data.Feature | null>(null);
   const currentLocationCenteredRef = useRef(false);
+  const questionNodesRef = useRef(new Map<string, HTMLElement>());
+  const soloAnswerSheetRef = useRef<HTMLElement>(null);
   const [state, setState] = useState<SharedState>(() => initialSolo?.boardState ?? restoredState());
   const [solo, setSolo] = useState<SoloClientSession | undefined>(initialSolo);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -413,6 +530,12 @@ export default function App() {
   const [soloStartPosition, setSoloStartPosition] = useState<Position | undefined>();
   const [soloDateTime, setSoloDateTime] = useState(() => defaultSfDateTime());
   const [soloHidingTimeMinutes, setSoloHidingTimeMinutes] = useState(30);
+  const [soloPreview, setSoloPreview] = useState<{ constraintId: string; answer: Constraint['answer']; label: string }>();
+  const [gameSummaryOpen, setGameSummaryOpen] = useState(Boolean(initialSolo?.reveal && initialSolo.reveal.reason !== 'peek'));
+  const [soloAnswerSheet, setSoloAnswerSheet] = useState<SoloAnswerSheet>();
+  const [curseVetoEffectId, setCurseVetoEffectId] = useState<string>();
+  const [curseVetoReason, setCurseVetoReason] = useState<'not-available' | 'unsafe' | 'closed' | 'other'>('not-available');
+  const [curseVetoNote, setCurseVetoNote] = useState('');
   const [finishMapUrl, setFinishMapUrl] = useState('');
   const [hangmanGuess, setHangmanGuess] = useState('');
   const [currentLocationVisible, setCurrentLocationVisible] = useState(false);
@@ -421,6 +544,10 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [stationSearch, setStationSearch] = useState('');
   const [selectedStation, setSelectedStation] = useState(validStations[0]?.id ?? '');
+  const [focusedStation, setFocusedStation] = useState<string>();
+  const [manualBoundaryEditing, setManualBoundaryEditing] = useState(false);
+  const [manualBoundaryDraft, setManualBoundaryDraft] = useState<ManualReachRegion[]>([]);
+  const [activeBoundaryRegionId, setActiveBoundaryRegionId] = useState<string>();
   const [traceActive, setTraceActive] = useState(false);
   const [traceScreenshot, setTraceScreenshot] = useState(false);
   const [tracePoints, setTracePoints] = useState<Position[]>([]);
@@ -439,6 +566,7 @@ export default function App() {
     [],
   ) as Record<PoiCategory, ReturnType<typeof partition>>;
   const selectedPoiPartition = activePoiPartition(state.layers);
+  const selectedPartitionLayer = activeMapPartition(state.layers);
   const selectedPartitionPois = useMemo(
     () => selectedPoiPartition ? pois.filter((poi) => poi.category === selectedPoiPartition) : [],
     [selectedPoiPartition],
@@ -457,6 +585,7 @@ export default function App() {
     () => filterStationsBySearch(scopedStations, stationSearch),
     [scopedStations, stationSearch],
   );
+  const activeBoundaryRegion = manualBoundaryDraft.find((region) => region.id === activeBoundaryRegionId);
   const allRouteEligibility = scopedRoutes.every((route) => state.routeStatuses[route.id] === 'in')
     ? 'in'
     : scopedRoutes.every((route) => state.routeStatuses[route.id] === 'out')
@@ -472,22 +601,69 @@ export default function App() {
     ).filter((id) => scopedStationIds.has(id)),
     [scopedRouteIds, scopedStationIds, state.routeStatuses, state.stationStatuses],
   );
+  const currentEvidence = useMemo(() => (solo?.cardState?.evidence ?? []).filter((evidence) =>
+    evidence.positionRevision === (solo?.cardState?.positionRevision ?? 0)),
+  [solo?.cardState?.evidence, solo?.cardState?.positionRevision]);
+  const evidenceConstraints = useMemo(() => currentEvidence.map((evidence) => ({
+    id: `evidence-${evidence.id}`,
+    name: evidence.label,
+    kind: 'thermometer' as const,
+    enabled: true,
+    answer: 'colder' as const,
+    answerSet: true,
+    origin: evidence.nearer,
+    originSet: true,
+    target: evidence.farther,
+    targetSet: true,
+  } satisfies Constraint)), [currentEvidence]);
+  const cursePlaces = useMemo(() => (solo?.cardState?.activeCurses ?? []).filter((effect) =>
+    effect.placePosition && !currentEvidence.some((evidence) => evidence.id === effect.id)),
+  [currentEvidence, solo?.cardState?.activeCurses]);
+  const committedManualReachArea = useMemo(() => state.manualReachBoundary?.regions.length
+    ? manualReachArea(state.manualReachBoundary.regions)
+    : undefined,
+  [state.manualReachBoundary?.regions]);
+  const draftManualReachArea = useMemo(() => manualBoundaryEditing
+    ? manualReachArea(manualBoundaryDraft)
+    : undefined,
+  [manualBoundaryDraft, manualBoundaryEditing]);
+  const committedConstraints = useMemo(() => solo
+    ? state.constraints.filter((constraint) => Boolean(solo.questions[constraint.id]) && constraint.enabled)
+    : state.constraints,
+  [solo, state.constraints]);
+  const previewConstraint = soloPreview
+    ? state.constraints.find((constraint) => constraint.id === soloPreview.constraintId)
+    : undefined;
+  const stationQuestionConstraints = useMemo(() => previewConstraint && soloPreview
+    ? [...committedConstraints, { ...previewConstraint, enabled: true, answer: soloPreview.answer }]
+    : committedConstraints,
+  [committedConstraints, previewConstraint, soloPreview]);
   const questionEligibleIds = useMemo(
-    () => stationIdsMatchingTransitQuestions(statusEligibleIds, state.constraints).filter((id) => {
+    () => stationIdsMatchingTransitQuestions(statusEligibleIds, stationQuestionConstraints).filter((id) => {
       const station = validStations.find((candidate) => candidate.id === id);
       return !!station && isHidingPositionAllowed(station);
     }),
-    [state.constraints, statusEligibleIds],
+    [stationQuestionConstraints, statusEligibleIds],
   );
-  const feasible = useMemo(
+  const baseFeasible = useMemo(
     () => {
-      const questionArea = combineConstraints(state.constraints, regions);
-      return (turf.intersect(turf.featureCollection([questionArea, allowedHidingArea])) as Area | null) ?? ({
+      const questionArea = combineConstraints([...committedConstraints, ...evidenceConstraints], regions);
+      const manuallyBounded = state.manualReachBoundary?.enabled && committedManualReachArea
+        ? turf.intersect(turf.featureCollection([questionArea, committedManualReachArea])) as Area | null
+        : questionArea;
+      return (manuallyBounded && turf.intersect(turf.featureCollection([manuallyBounded, allowedHidingArea])) as Area | null) ?? ({
         type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [] },
       } satisfies Area);
     },
-    [regions, state.constraints],
+    [committedConstraints, committedManualReachArea, evidenceConstraints, regions, state.manualReachBoundary?.enabled],
   );
+  const feasible = useMemo(() => {
+    if (!previewConstraint || !soloPreview) return baseFeasible;
+    const preview = questionPreviewArea(previewConstraint, soloPreview.answer, regions, state.stationZoneMiles);
+    return (turf.intersect(turf.featureCollection([baseFeasible, preview])) as Area | null) ?? ({
+      type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [] },
+    } satisfies Area);
+  }, [baseFeasible, previewConstraint, regions, soloPreview, state.stationZoneMiles]);
   const excluded = useMemo(() => excludedArea(feasible), [feasible]);
   const eligibleIds = useMemo(
     () => stationIdsOverlappingArea(questionEligibleIds, state.stationZoneMiles, feasible),
@@ -514,8 +690,9 @@ export default function App() {
   // New sessions receive the sealed session's authoritative counts. Keep the
   // inferred fallback so games saved before questionUses became public still load.
   const useCounts = solo?.questionUses ? normalizeQuestionUses(solo.questionUses) : inferredUseCounts;
+  const soloEffectClock = solo?.pausedAt ? Date.parse(solo.pausedAt) : soloClock;
   const soloVisibleCurses = (solo?.cardState?.activeCurses ?? []).filter((effect) =>
-    !effect.expiresAt || Date.parse(effect.expiresAt) > soloClock);
+    !effect.expiresAt || Date.parse(effect.expiresAt) > soloEffectClock);
   const soloQuestionBlocked = soloVisibleCurses.some((effect) => effect.blocksQuestions);
   const soloTimerKey = [
     ...(solo?.cardState?.activeCurses ?? []).flatMap((effect) => [effect.lockedUntil, effect.expiresAt]),
@@ -533,6 +710,13 @@ export default function App() {
   const askedUsesFor = (candidate: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>) =>
     solo ? useCounts[canonicalQuestionKey(candidate)] ?? 0 : 0;
 
+  const addManualBoundaryPoint = (position: Position) => {
+    if (!manualBoundaryEditing || !activeBoundaryRegionId || !insideSanFrancisco(position)) return;
+    setManualBoundaryDraft((current) => current.map((region) => region.id === activeBoundaryRegionId
+      ? { ...region, points: [...region.points, position].slice(0, 200) }
+      : region));
+  };
+
   useEffect(() => {
     if (!solo) {
       localStorage.removeItem(SOLO_STORAGE_KEY);
@@ -542,12 +726,23 @@ export default function App() {
   }, [solo, state]);
 
   useEffect(() => {
+    if (!solo) persistManualReachBoundary(localStorage, currentConfigKey(), state.manualReachBoundary);
+  }, [solo, state.manualReachBoundary]);
+
+  useEffect(() => {
+    if (solo?.pausedAt) return;
     const now = Date.now();
     const nextTimer = soloTimerKey.split('|').map(Date.parse).filter((time) => time > now).sort((a, b) => a - b)[0];
     if (!nextTimer) return;
     const timeoutId = window.setTimeout(() => setSoloClock(Date.now()), Math.max(0, nextTimer - now + 25));
     return () => window.clearTimeout(timeoutId);
-  }, [soloTimerKey, soloClock]);
+  }, [solo?.pausedAt, soloTimerKey, soloClock]);
+
+  useEffect(() => {
+    if (!solo || solo.phase === 'found' || solo.phase === 'gave-up' || solo.pausedAt) return;
+    const intervalId = window.setInterval(() => setSoloClock(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [solo?.pausedAt, solo?.phase]);
 
   useEffect(() => {
     if (!message || status !== 'ready') return;
@@ -556,6 +751,11 @@ export default function App() {
     }, 6000);
     return () => window.clearTimeout(timeoutId);
   }, [message, status]);
+
+  useEffect(() => {
+    if (!soloAnswerSheet) return;
+    requestAnimationFrame(() => soloAnswerSheetRef.current?.focus({ preventScroll: true }));
+  }, [soloAnswerSheet]);
 
   useEffect(() => () => longPress.dispose(), [longPress]);
 
@@ -566,8 +766,22 @@ export default function App() {
   }, [filteredStations, selectedStation]);
 
   useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const revealFocusedSearch = () => {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLInputElement && focused.type === 'search') keepMobileFieldVisible(focused);
+    };
+    viewport.addEventListener('resize', revealFocusedSearch);
+    viewport.addEventListener('scroll', revealFocusedSearch);
+    return () => {
+      viewport.removeEventListener('resize', revealFocusedSearch);
+      viewport.removeEventListener('scroll', revealFocusedSearch);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!currentLocationVisible) {
-      setCurrentLocation(undefined);
       currentLocationCenteredRef.current = false;
       return;
     }
@@ -653,6 +867,12 @@ export default function App() {
       if (!latLng) return;
       const position = { lat: latLng.lat(), lng: latLng.lng() };
       const placeId = 'placeId' in event ? event.placeId : undefined;
+      if (manualBoundaryEditing) {
+        if (placeId) event.stop();
+        infoWindow.close();
+        addManualBoundaryPoint(position);
+        return;
+      }
       if (traceActive) {
         infoWindow.close();
         if (insideSanFrancisco(position)) setTracePoints((current) => [...current, position]);
@@ -666,7 +886,7 @@ export default function App() {
       showMapLinkCard(infoWindow, map, position, googleMapsLinkForPlace(placeId, position), setMessage);
     });
     return () => listener.remove();
-  }, [longPress, status, traceActive]);
+  }, [activeBoundaryRegionId, longPress, manualBoundaryEditing, status, traceActive]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -725,8 +945,6 @@ export default function App() {
       zIndex: 25,
     });
     radarPreviewRef.current = { constraintId: selectedRadar.id, circle };
-    const bounds = circle.getBounds();
-    if (bounds) map.fitBounds(bounds, 48);
 
     return () => {
       circle.setMap(null);
@@ -840,14 +1058,17 @@ export default function App() {
         }
       });
     });
-    if (state.layers['transit-routes'] || (state.transitScope === 'all' && state.layers['other-transit-routes'])) {
+    if (focusedStation || state.layers['transit-routes'] || (state.transitScope === 'all' && state.layers['other-transit-routes'])) {
       transitRouteGeoJson.features.filter((feature) =>
-        feature.properties.mode === 'other-transit'
+        focusedStation && routesForStation(focusedStation).includes(feature.properties.routeId)
+          ? scopedRouteIds.has(feature.properties.routeId)
+          : feature.properties.mode === 'other-transit'
           ? state.transitScope === 'all' && state.layers['other-transit-routes']
           : state.layers['transit-routes'],
       ).forEach((feature) => {
         const routeStatus = state.routeStatuses[feature.properties.routeId];
-        data.addGeoJson({ ...feature, properties: { ...feature.properties, kind: 'transit-route', status: routeStatus ?? '', areaName: transitRouteLabel(feature.properties) } });
+        const focused = Boolean(focusedStation && routesForStation(focusedStation).includes(feature.properties.routeId));
+        data.addGeoJson({ ...feature, properties: { ...feature.properties, kind: 'transit-route', status: routeStatus ?? '', focused, areaName: transitRouteLabel(feature.properties) } });
       });
     }
     scopedStations.forEach((station) => {
@@ -855,16 +1076,49 @@ export default function App() {
       const stationStatus = state.stationStatuses[station.id];
       data.addGeoJson({
         type: 'Feature',
-        properties: { kind: 'station', id: station.id, status: stationStatus ?? '', eligible },
+        properties: { kind: 'station', id: station.id, status: stationStatus ?? '', eligible, focused: focusedStation === station.id, areaName: station.name },
         geometry: { type: 'Point', coordinates: [station.lng, station.lat] },
       });
       if (shouldDisplayStationZone(state.layers['station-zones'], eligible)) {
         data.addGeoJson({
           ...turf.circle([station.lng, station.lat], state.stationZoneMiles, { units: 'miles', steps: 24 }),
-          properties: { kind: 'station-zone', id: station.id, status: stationStatus ?? '', eligible },
+          properties: { kind: 'station-zone', id: station.id, status: stationStatus ?? '', eligible, focused: focusedStation === station.id, areaName: station.name },
         });
       }
     });
+    if (!manualBoundaryEditing && state.manualReachBoundary?.visible && committedManualReachArea?.geometry.coordinates.length) {
+      data.addGeoJson({
+        ...committedManualReachArea,
+        properties: { kind: 'manual-reach-boundary', areaName: 'User-researched maximum reach boundary', enabled: state.manualReachBoundary.enabled },
+      });
+    }
+    if (manualBoundaryEditing) {
+      if (draftManualReachArea?.geometry.coordinates.length) {
+        data.addGeoJson({ ...draftManualReachArea, properties: { kind: 'manual-reach-draft', areaName: 'Unsaved maximum reach preview' } });
+      }
+      manualBoundaryDraft.forEach((region, regionIndex) => region.points.forEach((position, pointIndex) => data.addGeoJson({
+        type: 'Feature',
+        properties: { kind: 'manual-reach-point', areaName: `Region ${regionIndex + 1}, point ${pointIndex + 1}`, active: region.id === activeBoundaryRegionId },
+        geometry: { type: 'Point', coordinates: [position.lng, position.lat] },
+      })));
+    }
+    if (solo?.startPosition) {
+      data.addGeoJson({
+        type: 'Feature',
+        properties: { kind: 'solo-start', areaName: 'Original Solo starting location' },
+        geometry: { type: 'Point', coordinates: [solo.startPosition.lng, solo.startPosition.lat] },
+      });
+    }
+    currentEvidence.forEach((evidence) => data.addGeoJson({
+      type: 'Feature',
+      properties: { kind: 'solo-evidence', areaName: evidence.placeName ?? evidence.label },
+      geometry: { type: 'Point', coordinates: [evidence.farther.lng, evidence.farther.lat] },
+    }));
+    cursePlaces.forEach((effect) => effect.placePosition && data.addGeoJson({
+      type: 'Feature',
+      properties: { kind: 'solo-curse-place', areaName: `${effect.name}: ${effect.placeName ?? 'mapped destination'}` },
+      geometry: { type: 'Point', coordinates: [effect.placePosition.lng, effect.placePosition.lat] },
+    }));
     if (droppedPin) {
       data.addGeoJson({
         type: 'Feature',
@@ -880,7 +1134,10 @@ export default function App() {
     if (solo?.reveal) soloRevealMapFeatures(solo.reveal).forEach((feature) => data.addGeoJson(feature));
     const displayedArea = state.areaDisplayMode === 'excluded-red'
       ? { area: excluded, kind: 'excluded' }
-      : { area: feasible, kind: 'feasible' };
+      : { area: feasible, kind: soloPreview ? 'preview-feasible' : 'feasible' };
+    if (soloPreview && state.areaDisplayMode !== 'excluded-red' && baseFeasible.geometry.coordinates.length > 0) {
+      data.addGeoJson({ ...baseFeasible, properties: { kind: 'feasible' } });
+    }
     if (displayedArea.area.geometry.coordinates.length > 0) {
       data.addGeoJson({ ...displayedArea.area, properties: { kind: displayedArea.kind } });
     }
@@ -907,7 +1164,11 @@ export default function App() {
       const routeStatus = statusValue === 'in' || statusValue === 'out' ? statusValue : undefined;
       const eligible = eligibilityValue !== false;
       if (kind === 'feasible') return { fillColor: '#16a34a', fillOpacity: 0.28, strokeColor: '#166534', strokeWeight: 3, zIndex: 1 };
+      if (kind === 'preview-feasible') return { fillColor: '#f59e0b', fillOpacity: 0.3, strokeColor: '#b45309', strokeOpacity: 1, strokeWeight: 4, zIndex: 8 };
       if (kind === 'excluded') return { fillColor: '#dc2626', fillOpacity: 0.28, strokeColor: '#991b1b', strokeWeight: 2, zIndex: 1 };
+      if (kind === 'manual-reach-boundary') return { fillColor: '#0f766e', fillOpacity: feature.getProperty('enabled') === true ? 0.06 : 0, strokeColor: '#0f766e', strokeOpacity: 1, strokeWeight: 4, zIndex: 9 };
+      if (kind === 'manual-reach-draft') return { fillColor: '#f59e0b', fillOpacity: 0.11, strokeColor: '#b45309', strokeOpacity: 1, strokeWeight: 4, zIndex: 12 };
+      if (kind === 'manual-reach-point') return { icon: { path: google.maps.SymbolPath.CIRCLE, fillColor: feature.getProperty('active') === true ? '#f59e0b' : '#64748b', fillOpacity: 1, strokeColor: '#ffffff', strokeWeight: 2, scale: 6 }, zIndex: 45 };
       if (kind === 'no-hide-region') return { fillColor: '#111827', fillOpacity: 0.42, strokeColor: '#020617', strokeOpacity: 0.9, strokeWeight: 3, zIndex: 7 };
       if (kind === 'hider-trace') return { strokeColor: '#e11d48', strokeOpacity: 0.95, strokeWeight: 5, zIndex: 20 };
       if (kind === 'trace-point') {
@@ -942,6 +1203,24 @@ export default function App() {
           zIndex: 55,
         };
       }
+      if (kind === 'solo-start') {
+        return {
+          icon: { path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW, fillColor: '#0f766e', fillOpacity: 1, strokeColor: '#ffffff', strokeWeight: 2, scale: 7 },
+          zIndex: 58,
+        };
+      }
+      if (kind === 'solo-evidence') {
+        return {
+          icon: { path: google.maps.SymbolPath.CIRCLE, fillColor: '#7c3aed', fillOpacity: 1, strokeColor: '#ffffff', strokeWeight: 3, scale: 8 },
+          zIndex: 57,
+        };
+      }
+      if (kind === 'solo-curse-place') {
+        return {
+          icon: { path: google.maps.SymbolPath.CIRCLE, fillColor: '#c026d3', fillOpacity: 1, strokeColor: '#ffffff', strokeWeight: 3, scale: 8 },
+          zIndex: 56,
+        };
+      }
       if (kind === 'dropped-pin') {
         const pin = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="48" viewBox="0 0 40 48"><path d="M20 1C9.5 1 1 9.5 1 20c0 13 19 27 19 27s19-14 19-27C39 9.5 30.5 1 20 1Z" fill="#dc2626" stroke="white" stroke-width="2"/><circle cx="20" cy="19" r="7" fill="white"/></svg>';
         return {
@@ -955,10 +1234,12 @@ export default function App() {
       }
       if (kind === 'transit-route') {
         const mode = feature.getProperty('mode');
+        const focused = feature.getProperty('focused') === true;
         return {
-          strokeColor: routeStatus === 'out' ? '#b91c1c' : routeStatus === 'in' ? '#15803d' : mode === 'light-rail' ? '#7c3aed' : mode === 'rapid-muni' ? '#ea580c' : '#64748b',
+          strokeColor: focused ? '#f59e0b' : routeStatus === 'out' ? '#b91c1c' : routeStatus === 'in' ? '#15803d' : mode === 'light-rail' ? '#7c3aed' : mode === 'rapid-muni' ? '#ea580c' : '#64748b',
           strokeOpacity: routeStatus === 'out' ? 0.48 : mode === 'other-transit' ? 0.58 : 0.82,
-          strokeWeight: routeStatus ? 6 : mode === 'other-transit' ? 2.5 : 4,
+          strokeWeight: focused ? 8 : routeStatus ? 6 : mode === 'other-transit' ? 2.5 : 4,
+          zIndex: focused ? 18 : 3,
         };
       }
       if (kind === 'station-zone') {
@@ -967,6 +1248,7 @@ export default function App() {
       }
       if (kind === 'station' || kind === 'hider') {
         const isHider = kind === 'hider';
+        const focused = feature.getProperty('focused') === true;
         const color = isHider ? '#111827' : !eligible || routeStatus === 'out' ? '#b91c1c' : routeStatus === 'in' ? '#15803d' : '#2563eb';
         return {
           icon: {
@@ -975,8 +1257,9 @@ export default function App() {
             fillOpacity: 1,
             strokeColor: '#ffffff',
             strokeWeight: 1.5,
-            scale: isHider ? 7 : 3.7,
+            scale: isHider ? 7 : focused ? 8 : 5,
           },
+          zIndex: focused ? 40 : 10,
         };
       }
       if (kind === 'poi-source') {
@@ -1016,6 +1299,11 @@ export default function App() {
     });
     data.addListener('click', (event: google.maps.Data.MouseEvent) => {
       if (longPress.shouldSuppressClick()) return;
+      if (manualBoundaryEditing && event.latLng) {
+        const position = { lat: event.latLng.lat(), lng: event.latLng.lng() };
+        addManualBoundaryPoint(position);
+        return;
+      }
       if (event.feature.getProperty('kind') === 'dropped-pin' && event.latLng) {
         const position = { lat: event.latLng.lat(), lng: event.latLng.lng() };
         showMapLinkCard(placeInfoWindowRef.current!, map, position, googleMapsLinkForPosition(position), setMessage, 'Dropped pin', () => setDroppedPin(undefined));
@@ -1026,6 +1314,16 @@ export default function App() {
         if (insideSanFrancisco(next)) setTracePoints((current) => [...current, next]);
         return;
       }
+      const kind = event.feature.getProperty('kind');
+      if (kind === 'station' || kind === 'station-zone') {
+        const id = event.feature.getProperty('id');
+        if (typeof id === 'string' && scopedStationIds.has(id)) {
+          setSelectedStation(id);
+          setFocusedStation(id);
+          setStationSearch('');
+        }
+        return;
+      }
       const areaName = event.feature.getProperty('areaName');
       if (typeof areaName === 'string') setMessage(areaName);
     });
@@ -1034,7 +1332,7 @@ export default function App() {
     });
     data.addListener('mouseup', longPress.cancel);
     data.addListener('mouseout', longPress.cancel);
-  }, [droppedPin, eligibleIds, excluded, feasible, longPress, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.cardState?.moves, solo?.reveal, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
+  }, [activeBoundaryRegionId, baseFeasible, committedManualReachArea, currentEvidence, cursePlaces, draftManualReachArea, droppedPin, eligibleIds, excluded, feasible, focusedStation, longPress, manualBoundaryDraft, manualBoundaryEditing, partitions, scopedRouteIds, scopedStationIds, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.cardState?.moves, solo?.reveal, solo?.startPosition, soloPreview, state.areaDisplayMode, state.hiderPosition, state.layers, state.manualReachBoundary, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => {
@@ -1045,16 +1343,26 @@ export default function App() {
         const next = { ...constraint, ...update, ...(constraint.kind === 'tentacle' ? { distanceMiles: 1 } : {}) };
         const ready = questionIsReady(next);
         if (next.kind === 'endgame-confirmation' && next.answer === 'yes' && ready) startsEndGame = true;
-        return { ...next, enabled: ready ? (!wasReady ? true : next.enabled) : false };
+        const isCommittedSoloAnswer = Boolean(solo?.questions[id]);
+        return { ...next, enabled: ready ? (!wasReady && (!solo || isCommittedSoloAnswer) ? true : next.enabled) : false };
       });
       return { ...current, constraints, endGameActive: current.endGameActive || startsEndGame };
     });
 
-  const add = () => {
+  const add = async () => {
     const kind = (document.querySelector('#kind') as HTMLSelectElement).value as QuestionKind;
     const category = solo && kind === 'photo-reference' ? SOLO_PHOTO_SUBJECTS[0].id : defaultCategory(kind);
-    const origin = state.viewport.center;
-    const regionId = category ? nearestPoi(category, origin)?.id : undefined;
+    const needsOrigin = questionRequiresOrigin({ kind, category });
+    let origin = currentLocation;
+    if (needsOrigin && !origin) {
+      const located = await browserPosition();
+      if (located && insideSanFrancisco(located)) {
+        origin = located;
+        setCurrentLocation(located);
+      }
+    }
+    const resolvedOrigin = origin ?? state.viewport.center;
+    const regionId = category ? nearestPoi(category, resolvedOrigin)?.id : undefined;
     const id = crypto.randomUUID();
     const draft: Constraint = {
       id,
@@ -1063,8 +1371,9 @@ export default function App() {
       enabled: false,
       answer: defaultAnswer(kind),
       answerSet: !!solo || kind !== 'endgame-confirmation',
-      origin,
-      originSet: !questionRequiresOrigin({ kind, category }),
+      origin: resolvedOrigin,
+      originSet: !needsOrigin || Boolean(origin),
+      originMapUrl: needsOrigin && origin ? googleMapsLinkForPosition(origin) : undefined,
       target: { lat: 37.7857, lng: -122.4011 },
       targetSet: !questionRequiresTarget({ kind }),
       distanceMiles: kind === 'tentacle' ? 1 : kind === 'thermometer' ? 3 : kind === 'radar' ? 0.25 : 1,
@@ -1072,19 +1381,21 @@ export default function App() {
       category,
       regionId,
     };
-    draft.enabled = questionIsReady(draft);
+    draft.enabled = solo ? false : questionIsReady(draft);
     setSelectedConstraintId(id);
     setState((current) => ({
       ...current,
       constraints: [draft, ...current.constraints],
     }));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const question = questionNodesRef.current.get(id);
+      if (question) question.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    }));
+    if (needsOrigin && !origin) setMessage('Current location was not available. Set the question pin manually.');
   };
 
   const selectConstraint = (constraint: Constraint) => {
     setSelectedConstraintId(constraint.id);
-    if (constraint.kind !== 'radar' || radarPreviewRef.current?.constraintId !== constraint.id) return;
-    const bounds = radarPreviewRef.current.circle.getBounds();
-    if (bounds) mapRef.current?.fitBounds(bounds, 48);
   };
 
   const applyConstraintPosition = (constraint: Constraint, update: Partial<Constraint>, position: Position) => {
@@ -1097,8 +1408,6 @@ export default function App() {
       ...('target' in update ? { targetSet: true } : {}),
       regionId: derivedRegion,
     });
-    mapRef.current?.panTo(position);
-    if ((mapRef.current?.getZoom() ?? 0) < 14) mapRef.current?.setZoom(14);
   };
 
   const setEligibility = (scope: 'station' | 'route', id: string, value: Eligibility | '') =>
@@ -1158,6 +1467,77 @@ export default function App() {
     setMessage(transitScope === 'primary'
       ? `${nextStations.length} light-rail or Rapid Muni stations shown; Other transit is hidden.`
       : 'All transit stations and routes are shown again.');
+  };
+
+  const createManualReachRegion = (): ManualReachRegion => ({ id: crypto.randomUUID(), points: [] });
+
+  const beginManualBoundaryEditing = () => {
+    const existing = state.manualReachBoundary?.regions.map((region) => ({
+      ...region,
+      points: region.points.map((position) => ({ ...position })),
+    })) ?? [];
+    const regions = existing.length ? existing : [createManualReachRegion()];
+    setManualBoundaryDraft(regions);
+    setActiveBoundaryRegionId(regions[0].id);
+    setManualBoundaryEditing(true);
+    setFocusedStation(undefined);
+    setTraceActive(false);
+    setMessage('Boundary editing started. Tap the map to add researched edge points.');
+    requestAnimationFrame(() => mapNode.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  };
+
+  const patchManualReachRegion = (id: string, update: Partial<ManualReachRegion>) =>
+    setManualBoundaryDraft((current) => current.map((region) => region.id === id ? { ...region, ...update } : region));
+
+  const addManualReachRegion = () => {
+    if (manualBoundaryDraft.length >= 20) {
+      setMessage('A maximum of 20 disconnected boundary regions is supported.');
+      return;
+    }
+    const region = createManualReachRegion();
+    setManualBoundaryDraft((current) => [...current, region]);
+    setActiveBoundaryRegionId(region.id);
+  };
+
+  const removeActiveManualReachRegion = () => {
+    if (!activeBoundaryRegionId) return;
+    const remaining = manualBoundaryDraft.filter((region) => region.id !== activeBoundaryRegionId);
+    const regions = remaining.length ? remaining : [createManualReachRegion()];
+    setManualBoundaryDraft(regions);
+    setActiveBoundaryRegionId(regions[0].id);
+  };
+
+  const saveManualBoundary = () => {
+    if (!manualBoundaryDraft.length || manualBoundaryDraft.some((region) => region.points.length < 3)) {
+      setMessage('Each boundary region needs at least three map points. Remove empty regions or add more points.');
+      return;
+    }
+    for (const region of manualBoundaryDraft) {
+      const ring = [...region.points.map((position) => [position.lng, position.lat]), [region.points[0].lng, region.points[0].lat]];
+      const polygon = turf.polygon([ring]);
+      if (turf.kinks(polygon).features.length > 0) {
+        setMessage('A boundary crosses itself. Undo or reorder its points before saving.');
+        return;
+      }
+    }
+    const regions = manualBoundaryDraft.map((region) => ({ id: region.id, points: region.points }));
+    setState((current) => ({
+      ...current,
+      manualReachBoundary: {
+        enabled: current.manualReachBoundary?.enabled ?? true,
+        visible: true,
+        regions,
+      },
+    }));
+    setManualBoundaryEditing(false);
+    setMessage('Maximum reach boundary saved and shown on the map.');
+  };
+
+  const fitManualBoundary = (regions: ManualReachRegion[]) => {
+    if (!mapRef.current || regions.every((region) => region.points.length === 0)) return;
+    const bounds = new google.maps.LatLngBounds();
+    regions.forEach((region) => region.points.forEach((position) => bounds.extend(position)));
+    mapRef.current.fitBounds(bounds, 48);
   };
 
   const fitTrace = () => {
@@ -1224,6 +1604,8 @@ export default function App() {
       };
       const session: SoloClientSession = {
         ...body,
+        createdAt: body.createdAt ?? new Date().toISOString(),
+        startPosition: body.startPosition ?? soloStartPosition,
         questions: {},
         questionUses: body.questionUses ?? {},
         humanState: state,
@@ -1231,6 +1613,9 @@ export default function App() {
       };
       setState(boardState);
       setSolo(session);
+      setSoloPreview(undefined);
+      setSoloAnswerSheet(undefined);
+      setGameSummaryOpen(false);
       setSoloSetupOpen(false);
       setMenuOpen(false);
       mapRef.current?.panTo(soloStartPosition);
@@ -1249,12 +1634,19 @@ export default function App() {
       ...current,
       constraints: current.constraints.map((existing) => ({ ...existing, enabled: false })),
       endGameActive: false,
+      manualReachBoundary: current.manualReachBoundary
+        ? { ...current.manualReachBoundary, enabled: false }
+        : undefined,
     }));
+    setSoloPreview(undefined);
   };
 
   const askSolo = async (constraint: Constraint) => {
     if (!solo || solo.questions[constraint.id]) return;
     try {
+      setSoloPreview(undefined);
+      setSoloAnswerSheet(undefined);
+      setMessage('');
       setSoloBusy(true);
       const response = await fetch('/api/solo/question', {
         method: 'POST',
@@ -1294,6 +1686,11 @@ export default function App() {
         randomizedFrom: body.outcome === 'randomized' ? body.randomizedFrom || constraint.name || 'Original question' : undefined,
         randomizedTo: body.outcome === 'randomized' ? body.randomizedTo || effectiveConstraint.name || 'Replacement question' : undefined,
       };
+      const fallbackMessage = body.geminiFallbackReason === 'rate-limit'
+        ? 'Gemini’s per-minute limit was reached for this decision, so built-in strategy was used.'
+        : body.geminiFallbackReason === 'error' || body.geminiFallbackReason === 'unavailable'
+          ? 'Gemini was unavailable for this decision, so built-in strategy was used. It will try again next time.'
+          : undefined;
       setSolo((current) => current ? {
         ...current,
         token: body.token!,
@@ -1306,17 +1703,7 @@ export default function App() {
         questions: { ...current.questions, [constraint.id]: record },
       } : current);
       if (body.phase === 'end-game') setState((current) => ({ ...current, endGameActive: true }));
-      const resultMessage = body.playedCardAnnouncements?.length ? body.playedCardAnnouncements.join(' ') : body.phase === 'end-game'
-        ? 'Confirmed — the end game has begun.'
-        : record.cardsDrawn === 0
-          ? 'Xeno answered · no cards drawn.'
-          : `Xeno answered · drew ${record.cardsDrawn} card${record.cardsDrawn === 1 ? '' : 's'}.`;
-      const fallbackMessage = body.geminiFallbackReason === 'rate-limit'
-        ? 'Gemini’s per-minute limit was reached for this decision, so built-in strategy was used.'
-        : body.geminiFallbackReason === 'error' || body.geminiFallbackReason === 'unavailable'
-          ? 'Gemini was unavailable for this decision, so built-in strategy was used. It will try again next time.'
-          : '';
-      setMessage([resultMessage, fallbackMessage].filter(Boolean).join(' '));
+      setSoloAnswerSheet({ questionName: effectiveConstraint.name, record, fallbackMessage });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Xeno could not answer.');
     } finally {
@@ -1337,14 +1724,19 @@ export default function App() {
       phase: body.phase!,
       cardState: body.cardState ?? current.cardState,
       reveal: reveal ?? (current.reveal?.reason === 'peek' ? undefined : current.reveal),
+      ...(reveal && reveal.reason !== 'peek' ? { pausedAt: undefined, totalPausedSeconds: reveal.pausedSeconds ?? current.totalPausedSeconds, pauseCount: reveal.pauseCount ?? current.pauseCount } : {}),
     } : current);
     if (body.phase === 'end-game' || body.phase === 'found') {
       setState((current) => ({ ...current, endGameActive: true }));
     }
+    if (reveal && reveal.reason !== 'peek') setGameSummaryOpen(true);
     if (body.message) setMessage(body.message);
   };
 
-  const sendSoloCardEvent = async (event: { type: 'accept-pending' | 'reject-pending' | 'clear' | 'complete-task' | 'report-failure'; effectId: string } | { type: 'hangman-guess'; effectId: string; guess: string }) => {
+  const sendSoloCardEvent = async (event:
+    | { type: 'accept-pending' | 'reject-pending' | 'clear' | 'complete-task' | 'report-failure'; effectId: string }
+    | { type: 'veto-infeasible'; effectId: string; reason: 'not-available' | 'unsafe' | 'closed' | 'other'; note?: string }
+    | { type: 'hangman-guess'; effectId: string; guess: string }) => {
     if (!solo) return;
     try {
       setSoloBusy(true);
@@ -1366,6 +1758,39 @@ export default function App() {
       setMessage(body.message ?? 'Card state updated.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not update the curse.');
+    } finally {
+      setSoloBusy(false);
+    }
+  };
+
+  const toggleSoloClock = async () => {
+    if (!solo) return;
+    try {
+      setSoloBusy(true);
+      const response = await fetch('/api/solo/clock', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: solo.token, action: solo.pausedAt ? 'resume' : 'pause' }),
+      });
+      const body = await response.json() as {
+        token?: string;
+        phase?: SoloClientSession['phase'];
+        clock?: Pick<SoloClientSession, 'createdAt' | 'pausedAt' | 'totalPausedSeconds' | 'pauseCount'>;
+        cardState?: SoloPublicCardState;
+        message?: string;
+        error?: string;
+      };
+      if (!response.ok || !body.token || !body.clock) throw new Error(body.error ?? 'Could not update the game timer.');
+      setSolo((current) => current ? {
+        ...current,
+        ...body.clock,
+        token: body.token!,
+        phase: body.phase ?? current.phase,
+        cardState: body.cardState ?? current.cardState,
+      } : current);
+      setSoloClock(Date.now());
+      setMessage(body.message ?? (body.clock.pausedAt ? 'Game timer paused.' : 'Game timer resumed.'));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not update the game timer.');
     } finally {
       setSoloBusy(false);
     }
@@ -1447,18 +1872,35 @@ export default function App() {
     setSolo(undefined);
     setMenuOpen(false);
     setFinishMapUrl('');
+    setSoloPreview(undefined);
+    setSoloAnswerSheet(undefined);
+    setGameSummaryOpen(false);
     setMessage('Returned to the previous human-mode workspace.');
   };
 
   const share = async () => {
     const url = new URL(location.href);
-    const sourceState = solo?.humanState ?? state;
-    const shareState = { ...sourceState, hiderPosition: undefined, hiderMapUrl: undefined };
-    url.searchParams.set('config', encodeState(shareState));
+    url.searchParams.set('config', encodeState(shareableState(state)));
+    if (url.href.length > 4000) {
+      setMessage('This map is still too detailed for a reliable text-message link. Reduce the manual boundary or remove old active map constraints, then share again.');
+      return;
+    }
     history.replaceState({}, '', url);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'SF Hiding Area map', url: url.href });
+        setMessage(solo ? 'Map shared without the Solo secret.' : 'Map shared without the private hider position.');
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          setMessage('Sharing canceled.');
+          return;
+        }
+      }
+    }
     try {
       await navigator.clipboard?.writeText(url.href);
-      setMessage(solo ? 'Share URL copied. The Solo session and hiding secret were not included.' : 'Share URL copied. Your hider position was not included.');
+      setMessage(solo ? 'Compact share URL copied. The Solo session and hiding secret were not included.' : 'Compact share URL copied. Your hider position was not included.');
     } catch {
       setMessage(solo ? 'Share URL is ready. The Solo session and hiding secret were not included.' : 'Share URL is ready in the address bar. Your hider position was not included.');
     }
@@ -1474,6 +1916,18 @@ export default function App() {
     }
   };
 
+  const soloElapsed = solo ? elapsedSoloSeconds({
+    createdAt: solo.createdAt || solo.departureTime,
+    pausedAt: solo.pausedAt,
+    totalPausedSeconds: solo.totalPausedSeconds,
+  }, soloClock) : 0;
+  const focusedStationData = focusedStation
+    ? scopedStations.find((station) => station.id === focusedStation)
+    : undefined;
+  const soloAnswerCardActions = (soloAnswerSheet?.record.playedCards ?? []).filter((announcement) =>
+    !(soloAnswerSheet?.record.outcome === 'randomized' && announcement.startsWith('Xeno played Randomize question')) &&
+    !(soloAnswerSheet?.record.outcome === 'vetoed' && announcement.startsWith('Xeno played Veto question')));
+
   return (
     <main>
       <header>
@@ -1488,13 +1942,17 @@ export default function App() {
             {!solo && <button type="button" role="menuitem" onClick={() => { setSoloSetupOpen(true); setMenuOpen(false); }}>Start Solo game</button>}
             {solo && <button type="button" role="menuitem" onClick={revealSolo} disabled={solo.phase === 'found' || solo.phase === 'gave-up' || soloBusy}>Reveal</button>}
             {solo && <button type="button" role="menuitem" onClick={resignSolo} disabled={solo.phase === 'found' || solo.phase === 'gave-up' || soloBusy}>Resign</button>}
+            {solo?.reveal && solo.reveal.reason !== 'peek' && <button type="button" role="menuitem" onClick={() => { setGameSummaryOpen(true); setMenuOpen(false); }}>View game summary</button>}
             {solo && <button type="button" role="menuitem" onClick={exitSolo}>Exit Solo</button>}
           </div>}
         </div>
       </header>
       {solo ? <nav className="solo-status" aria-label="Solo game status">
-        <span><b>{solo.phase === 'end-game' ? 'End game' : solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Revealed' : 'Seeking'}</b><small>{solo.cardState ? `${solo.cardState.handCount}/${solo.cardState.maxHandSize} hand · ${solo.cardState.deckCount} deck` : `${solo.cardsDrawn} drawn · ${solo.cardsKept} kept`}</small></span>
-        <button type="button" onClick={checkSoloCurrentLocation} disabled={soloBusy || solo.phase === 'found' || solo.phase === 'gave-up'}>{soloBusy ? 'Checking position…' : 'Check if we found the hider'}</button>
+        <span><b>{solo.pausedAt ? 'Paused' : solo.phase === 'end-game' ? 'End game' : solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Revealed' : 'Seeking'} · {formatElapsedTime(solo.reveal?.elapsedHidingSeconds ?? soloElapsed)}</b><small>{solo.cardState ? `${solo.cardState.handCount}/${solo.cardState.maxHandSize} hand · ${solo.cardState.deckCount} deck` : `${solo.cardsDrawn} drawn · ${solo.cardsKept} kept`}</small></span>
+        <div className="solo-status-actions">
+          <button type="button" className="secondary" onClick={() => void toggleSoloClock()} disabled={soloBusy || solo.phase === 'found' || solo.phase === 'gave-up'}>{solo.pausedAt ? 'Resume' : 'Pause'}</button>
+          <button type="button" onClick={checkSoloCurrentLocation} disabled={soloBusy || Boolean(solo.pausedAt) || solo.phase === 'found' || solo.phase === 'gave-up'}>{soloBusy ? 'Checking…' : 'Check location'}</button>
+        </div>
       </nav> : <>
         <nav className="mode-switch" aria-label="Player mode">
           <button className={state.mode === 'seeker' ? 'active' : ''} onClick={() => setState((current) => ({ ...current, mode: 'seeker' }))}>Seeker</button>
@@ -1555,13 +2013,14 @@ export default function App() {
                 {effect.blocksTransit && <p className="warning-line"><b>Transportation is blocked until this curse resolves.</b></p>}
                 {effect.placeName && <p><b>{effect.placeName}</b>{effect.citationUrl && <> · <a href={effect.citationUrl} target="_blank" rel="noreferrer">Google Maps source</a></>}</p>}
                 {effect.imageUrl && <img src={effect.imageUrl} alt="Street View scene supplied by the curse" />}
-                {effect.mazeSvg && <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(effect.mazeSvg)}`} alt="Maze to solve before clearing the curse" />}
-                {effect.hangmanPattern && <><p className="proof">{effect.hangmanPattern}<br />Wrong: {effect.hangmanWrong?.join(', ') || 'none'}</p>{effect.status !== 'waiting' && <div className="map-place-actions"><input aria-label="Hangman guess" maxLength={5} disabled={hangmanLocked} value={hangmanGuess} onChange={(event) => setHangmanGuess(event.target.value)} /><button type="button" disabled={soloBusy || hangmanLocked || !hangmanGuess} onClick={() => void sendSoloCardEvent({ type: 'hangman-guess', effectId: effect.id, guess: hangmanGuess })}>{hangmanLocked ? 'Waiting to retry' : 'Guess'}</button></div>}</>}
+                {effect.mazeSvg && <img className="solo-maze" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(effect.mazeSvg)}`} alt="Challenging maze to solve before clearing the curse" />}
+                {effect.hangmanPattern && <><p className="proof">{effect.hangmanPattern}<br />Wrong: {effect.hangmanWrong?.join(', ') || 'none'}</p>{effect.status !== 'waiting' && <div className="map-place-actions"><input aria-label="Hangman guess" maxLength={5} disabled={hangmanLocked || Boolean(solo.pausedAt)} value={hangmanGuess} onChange={(event) => setHangmanGuess(event.target.value)} /><button type="button" disabled={soloBusy || hangmanLocked || Boolean(solo.pausedAt) || !hangmanGuess} onClick={() => void sendSoloCardEvent({ type: 'hangman-guess', effectId: effect.id, guess: hangmanGuess })}>{hangmanLocked ? 'Waiting to retry' : 'Guess'}</button></div>}</>}
                 <div className="map-place-actions">
-                  {effect.status === 'pending' && <><button type="button" className="keep" disabled={soloBusy} onClick={() => void sendSoloCardEvent({ type: 'accept-pending', effectId: effect.id })}>Condition met</button><button type="button" className="secondary" disabled={soloBusy} onClick={() => void sendSoloCardEvent({ type: 'reject-pending', effectId: effect.id })}>Condition not met</button></>}
-                  {effect.canClear && <button type="button" className="keep" disabled={soloBusy} onClick={() => void sendSoloCardEvent({ type: 'clear', effectId: effect.id })}>Task completed</button>}
-                  {effect.canCompleteTask && <button type="button" className="keep" disabled={soloBusy} onClick={() => void sendSoloCardEvent({ type: 'complete-task', effectId: effect.id })}>Initial task completed</button>}
-                  {effect.canReportFailure && <button type="button" className="danger" disabled={soloBusy} onClick={() => void sendSoloCardEvent({ type: 'report-failure', effectId: effect.id })}>{effect.failureInstruction ?? 'Report card condition'} · +{effect.failureBonusMinutes} min</button>}
+                  {effect.status === 'pending' && <><button type="button" className="keep" disabled={soloBusy || Boolean(solo.pausedAt)} onClick={() => void sendSoloCardEvent({ type: 'accept-pending', effectId: effect.id })}>Condition met</button><button type="button" className="secondary" disabled={soloBusy || Boolean(solo.pausedAt)} onClick={() => void sendSoloCardEvent({ type: 'reject-pending', effectId: effect.id })}>Condition not met</button></>}
+                  {effect.canClear && <button type="button" className="keep" disabled={soloBusy || Boolean(solo.pausedAt)} onClick={() => void sendSoloCardEvent({ type: 'clear', effectId: effect.id })}>Task completed</button>}
+                  {effect.canCompleteTask && <button type="button" className="keep" disabled={soloBusy || Boolean(solo.pausedAt)} onClick={() => void sendSoloCardEvent({ type: 'complete-task', effectId: effect.id })}>Initial task completed</button>}
+                  {effect.canVetoInfeasible && <button type="button" className="secondary" disabled={soloBusy || Boolean(solo.pausedAt)} onClick={() => { setCurseVetoEffectId(effect.id); setCurseVetoReason('not-available'); setCurseVetoNote(''); }}>Can’t do this curse</button>}
+                  {effect.canReportFailure && <button type="button" className="danger" disabled={soloBusy || Boolean(solo.pausedAt)} onClick={() => void sendSoloCardEvent({ type: 'report-failure', effectId: effect.id })}>{effect.failureInstruction ?? 'Report card condition'} · +{effect.failureBonusMinutes} min</button>}
                 </div>
                 </article>})}
               </section>
@@ -1640,24 +2099,47 @@ export default function App() {
               <label className="toggle"><input type="checkbox" checked={currentLocationVisible} onChange={(event) => setCurrentLocationVisible(event.target.checked)} />My current location</label>
             </div>
             <div className="inline-controls">
-              <label>Hiding-zone radius (miles)<input type="number" min="0.05" max="5" step="0.05" value={state.stationZoneMiles} onChange={(event) => setState((current) => ({ ...current, stationZoneMiles: Math.min(5, Math.max(0.05, Number(event.target.value) || 0.25)) }))} /></label>
-              <label>Area shading<select value={state.areaDisplayMode} onChange={(event) => setState((current) => ({ ...current, areaDisplayMode: event.target.value as AreaDisplayMode }))}><option value="allowed-green">Allowed green · excluded transparent</option><option value="excluded-red">Allowed transparent · excluded red</option></select></label>
+              <label>Hiding-zone radius (miles)<CommitNumberInput value={state.stationZoneMiles} min={0.05} max={5} step={0.05} onCommit={(stationZoneMiles) => setState((current) => ({ ...current, stationZoneMiles }))} /></label>
+              <label>Area shading<select value={state.areaDisplayMode} onChange={(event) => setState((current) => ({ ...current, areaDisplayMode: event.target.value as AreaDisplayMode }))}><option value="excluded-red">Allowed transparent · excluded red</option><option value="allowed-green">Allowed green · excluded transparent</option></select></label>
             </div>
             <p className="helper">{eligibleIds.length} of {scopedStations.length} stations currently possible. A station turns off when its hiding-radius zone no longer overlaps the green feasible area; explicit station and route cuts also apply.</p>
             <p className="helper">The current-location layer stays on this device and is never included in shared URLs.</p>
             <p className="helper">Press and hold anywhere on the map—including shaded areas and markers—to drop a temporary pin, then open or copy its Google Maps link.</p>
           </details>
 
+          <details className="panel manual-boundary-panel">
+            <summary>Maximum reach research</summary>
+            <p className="helper">The app does not calculate this boundary. Research the hider’s maximum reach yourself, then draw the result by tapping map points in order. Add another region for disconnected reachable areas.</p>
+            {!manualBoundaryEditing ? <>
+              {state.manualReachBoundary ? <>
+                <div className="toggle-grid">
+                  <label className="toggle"><input type="checkbox" checked={state.manualReachBoundary.enabled} onChange={(event) => setState((current) => current.manualReachBoundary ? { ...current, manualReachBoundary: { ...current.manualReachBoundary, enabled: event.target.checked } } : current)} />Apply to possible area</label>
+                  <label className="toggle"><input type="checkbox" checked={state.manualReachBoundary.visible} onChange={(event) => setState((current) => current.manualReachBoundary ? { ...current, manualReachBoundary: { ...current.manualReachBoundary, visible: event.target.checked } } : current)} />Show outline</label>
+                </div>
+                <p className={state.manualReachBoundary.enabled ? 'success-line' : 'draft-status'}>{state.manualReachBoundary.enabled ? 'Boundary is constraining the possible area.' : 'Boundary is saved but not applied.'}</p>
+                <div className="manual-boundary-summary">{state.manualReachBoundary.regions.map((region, index) => <div key={region.id}><b>Region {index + 1}</b><span>{region.points.length} points</span></div>)}</div>
+              </> : <p className="empty-state">No researched boundary has been drawn.</p>}
+              <div className="two-buttons manual-boundary-actions"><button type="button" className="keep" onClick={beginManualBoundaryEditing}>{state.manualReachBoundary ? 'Edit boundary' : 'Draw boundary'}</button><button type="button" className="secondary" disabled={!state.manualReachBoundary} onClick={() => state.manualReachBoundary && fitManualBoundary(state.manualReachBoundary.regions)}>Fit on map</button></div>
+              {state.manualReachBoundary && <button type="button" className="danger full" onClick={() => { if (confirm('Clear the researched maximum reach boundary? This cannot be undone.')) setState((current) => ({ ...current, manualReachBoundary: undefined })); }}>Clear boundary</button>}
+            </> : <>
+              <p className="draft-status">Editing preview · map taps add points to the active region. The saved boundary is unchanged until you choose Save.</p>
+              <div className="manual-region-toolbar">
+                <label className="stacked">Active region<select value={activeBoundaryRegionId ?? ''} onChange={(event) => setActiveBoundaryRegionId(event.target.value)}>{manualBoundaryDraft.map((region, index) => <option value={region.id} key={region.id}>Region {index + 1} · {region.points.length} points</option>)}</select></label>
+                <div className="two-buttons"><button type="button" className="secondary" onClick={addManualReachRegion}>Add region</button><button type="button" className="danger" onClick={removeActiveManualReachRegion}>Delete region</button></div>
+              </div>
+              {activeBoundaryRegion && <>
+                <div className="manual-point-actions"><button type="button" className="secondary" disabled={!activeBoundaryRegion.points.length} onClick={() => patchManualReachRegion(activeBoundaryRegion.id, { points: activeBoundaryRegion.points.slice(0, -1) })}>Undo point</button><button type="button" className="secondary" disabled={!activeBoundaryRegion.points.length} onClick={() => patchManualReachRegion(activeBoundaryRegion.id, { points: [] })}>Clear region</button><button type="button" className="secondary" disabled={!manualBoundaryDraft.some((region) => region.points.length)} onClick={() => fitManualBoundary(manualBoundaryDraft)}>Fit preview</button></div>
+              </>}
+              <div className="two-buttons modal-actions"><button type="button" className="secondary" onClick={() => { setManualBoundaryEditing(false); setManualBoundaryDraft([]); setActiveBoundaryRegionId(undefined); setMessage('Boundary edits canceled.'); }}>Cancel</button><button type="button" className="keep" onClick={saveManualBoundary}>Save boundary</button></div>
+            </>}
+          </details>
+
           <details className="panel">
-            <summary>Administrative and natural partitions</summary>
-            <div className="toggle-grid">
-              <label className="toggle"><input type="checkbox" checked={!!state.layers['supervisor-districts']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'supervisor-districts': event.target.checked } }))} />Supervisorial districts D1–D11</label>
-              <label className="toggle"><input type="checkbox" checked={!!state.layers['zip-codes']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'zip-codes': event.target.checked } }))} />ZIP-code areas</label>
-              <label className="toggle"><input type="checkbox" checked={!!state.layers.landmasses} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, landmasses: event.target.checked } }))} />SF landmasses</label>
-              <label className="toggle"><input type="checkbox" checked={!!state.layers['no-hide-zones']} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'no-hide-zones': event.target.checked } }))} />No-hide zones</label>
-              <label className="toggle"><input type="checkbox" checked={state.layers['partition-pins'] !== false} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'partition-pins': event.target.checked } }))} />Partition pins</label>
-            </div>
-            <p className="helper">Partition pins label Supervisorial districts, ZIP areas, landmasses, and the selected POI partition; no-hide zones intentionally have no name pins. Pins can be hidden independently from the colored regions. ZIP codes are generalized delivery areas, not official administrative districts. No-hide zones include the effective {noHideZoneProvenance.bufferFeet}-foot safety buffer and apply to every game mode.</p>
+            <summary>Administrative, natural, and POI partitions</summary>
+            <label className="stacked">Displayed partition<select aria-label="Displayed map partition" value={selectedPartitionLayer ?? ''} onChange={(event) => setState((current) => ({ ...current, layers: selectMapPartition(current.layers, event.target.value || undefined) }))}><option value="">Off</option><optgroup label="Administrative and natural">{GEOGRAPHIC_PARTITIONS.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</optgroup><optgroup label="Points of interest">{VISIBLE_POI_PARTITIONS.map((category) => <option key={category} value={category}>{CATEGORY_LABELS[category]}</option>)}</optgroup></select></label>
+            <label className="toggle"><input type="checkbox" checked={state.layers['partition-pins'] !== false} onChange={(event) => setState((current) => ({ ...current, layers: { ...current.layers, 'partition-pins': event.target.checked } }))} />Partition pins</label>
+            <p className="helper">Only one partition is displayed at a time. Partition pins label districts, ZIP areas, landmasses, and POI sources; no-hide zones intentionally have no name pins. ZIP codes are generalized delivery areas, not official administrative districts. No-hide zones remain enforced in every game mode even when another partition is displayed.</p>
+            {selectedPoiPartition && <><p className="helper">Numbered pins mark the selected POI sources; tap a pin or colored region to identify it.</p><div className="partition-key" role="list" aria-label={`${CATEGORY_LABELS[selectedPoiPartition]} map pin key`}>{selectedPartitionPois.map((poi, index) => <div className="legend" role="listitem" key={poi.id}><i className="pin-number" style={{ background: partitionColor(index, selectedPartitionPois.length) }}><span>{index + 1}</span></i><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>)}</div></>}
           </details>
 
           <details className="panel">
@@ -1669,9 +2151,9 @@ export default function App() {
               <button type="button" className="secondary" onClick={() => setAllStationEligibility('')}>Clear all</button>
             </div>
             <h3>One station</h3>
-            <label className="stacked">Search stations<input type="search" value={stationSearch} onChange={(event) => setStationSearch(event.target.value)} placeholder="Type part of a station name" /></label>
+            <label className="stacked">Search stations<input className="mobile-scroll-target" type="search" value={stationSearch} onFocus={(event) => keepMobileFieldVisible(event.currentTarget)} onChange={(event) => setStationSearch(event.target.value)} placeholder="Type part of a station name" /></label>
             <p className="helper">{filteredStations.length} of {scopedStations.length} stations shown.</p>
-            <label className="stacked">Station<select value={selectedStation} disabled={filteredStations.length === 0} onChange={(event) => setSelectedStation(event.target.value)}>{filteredStations.length === 0 && <option value="">No matching stations</option>}{filteredStations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
+            <label className="stacked">Station<select value={selectedStation} disabled={filteredStations.length === 0} onChange={(event) => { setSelectedStation(event.target.value); setFocusedStation(event.target.value || undefined); }}>{filteredStations.length === 0 && <option value="">No matching stations</option>}{filteredStations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
             {selectedStation && <p className="helper">Services stopping here: {routesForStation(selectedStation).filter((routeId) => scopedRouteIds.has(routeId)).join(', ') || 'no mapped transit service'}</p>}
             <div className="three-buttons">
               <button type="button" className="keep" disabled={!selectedStation} onClick={() => setEligibility('station', selectedStation, 'in')}>Keep in</button>
@@ -1687,21 +2169,13 @@ export default function App() {
             </div>
           </details>
 
-          <details className="panel">
-            <summary>POI partition layers</summary>
-            <label className="stacked">Displayed partition<select aria-label="POI partition layer" value={selectedPoiPartition ?? ''} onChange={(event) => setState((current) => ({ ...current, layers: selectPoiPartition(current.layers, (event.target.value || undefined) as PoiCategory | undefined) }))}><option value="">Off</option>{VISIBLE_POI_PARTITIONS.map((category) => <option key={category} value={category}>{CATEGORY_LABELS[category]}</option>)}</select></label>
-            <p className="helper">Only one POI partition is shown at a time. Numbered pins mark the source POIs; tap a pin or colored region to identify it.</p>
-            {selectedPoiPartition && <div className="partition-key" role="list" aria-label={`${CATEGORY_LABELS[selectedPoiPartition]} map pin key`}>{selectedPartitionPois.map((poi, index) => <div className="legend" role="listitem" key={poi.id}><i className="pin-number" style={{ background: partitionColor(index, selectedPartitionPois.length) }}><span>{index + 1}</span></i><a href={poi.sourceMapUrl ?? googleMapsLinkForPosition(poi)} target="_blank" rel="noreferrer">{poi.name}</a><small>row {poi.sourceRow}</small></div>)}</div>}
-          </details>
-
           <section className="questions">
             <div className="section-heading"><h2>Questions</h2></div>
             <div className="two-buttons bulk-question-buttons" role="group" aria-label="Enable or disable all questions">
               <button type="button" className="secondary" disabled={readyConstraints.length === 0 || readyConstraints.every((constraint) => constraint.enabled)} onClick={() => setEveryQuestionEnabled(true)}>Enable all complete</button>
               <button type="button" className="secondary" disabled={readyConstraints.length === 0 || readyConstraints.every((constraint) => !constraint.enabled)} onClick={() => setEveryQuestionEnabled(false)}>Disable all</button>
             </div>
-            <div className="add"><select id="kind" aria-label="Question type">{PRIMARY_QUESTION_KINDS.map((kind) => <option key={kind} value={kind}>{QUESTION_DEFINITIONS[kind].label}</option>)}</select><button onClick={add}>Add</button></div>
-            {state.constraints.length === 0 && <p className="empty-state">Add a question, then paste the Google Maps links the players shared.</p>}
+            <div className="add"><select id="kind" aria-label="Question type">{PRIMARY_QUESTION_KINDS.map((kind) => <option key={kind} value={kind}>{QUESTION_DEFINITIONS[kind].label}</option>)}</select><button onClick={() => void add()}>Add</button></div>
             {state.constraints.map((constraint) => {
               const definition = QUESTION_DEFINITIONS[constraint.kind];
               const usesOrigin = questionRequiresOrigin(constraint);
@@ -1745,8 +2219,10 @@ export default function App() {
                         : category === 'zip-code'
                           ? zipCodeAt(constraint.origin)?.properties.name
                         : sourcePoi?.name;
+              const previewBranches = solo && !askedRecord ? soloPreviewBranches(constraint) : [];
               return (
                 <article
+                  ref={(node) => { if (node) questionNodesRef.current.set(constraint.id, node); else questionNodesRef.current.delete(constraint.id); }}
                   key={constraint.id}
                   className={constraint.kind === 'radar' && selectedConstraintId === constraint.id ? 'radar-preview-active' : undefined}
                   onClick={() => selectConstraint(constraint)}
@@ -1759,11 +2235,11 @@ export default function App() {
                   {state.mode === 'hider' && <div className={`answer-result ${(constraint.kind === 'endgame-confirmation' || (state.hiderPosition && questionReady)) ? '' : 'waiting'}`}><span>Hider answer</span><strong>{!questionReady ? 'Complete the draft first' : constraint.kind === 'endgame-confirmation' ? 'Record whether this pin is inside your hiding zone' : state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
                   {askedRecord?.outcome === 'randomized' && <div className="answer-result randomized-result"><span>Xeno played Randomize question</span><p><s>{randomizedFrom}</s></p><strong>Replaced with: {randomizedTo}</strong></div>}
                   {askedRecord?.outcome === 'vetoed' && <div className="answer-result vetoed-result"><span>Xeno played Veto question</span><p><s>{constraint.name}</s></p><strong>No answer was given.</strong><p>The question counts as asked, no cards were drawn, and it does not affect the map.</p></div>}
+                  {askedRecord && askedRecord.outcome !== 'vetoed' && <div className="answer-result"><span>{askedRecord.outcome === 'randomized' ? 'Xeno’s answer to replacement' : 'Xeno’s answer'} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={constraint.kind === 'photo-reference' && constraint.category === 'you' ? 'Xeno selfie easter egg' : `${constraint.name} Street View answer`} onError={(event) => { event.currentTarget.hidden = true; setMessage('The photo could not be loaded. The text answer remains available.'); }} />}</div>}
                   {askedRecord?.playedCards?.filter((announcement) =>
                     !(askedRecord.outcome === 'randomized' && announcement.startsWith('Xeno played Randomize question')) &&
                     !(askedRecord.outcome === 'vetoed' && announcement.startsWith('Xeno played Veto question'))
                   ).map((announcement) => <div className="answer-result card-action-result" key={announcement}><span>Xeno card action</span><strong>{announcement}</strong></div>)}
-                  {askedRecord && askedRecord.outcome !== 'vetoed' && <div className="answer-result"><span>{askedRecord.outcome === 'randomized' ? 'Xeno’s answer to replacement' : 'Xeno’s answer'} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={constraint.kind === 'photo-reference' && constraint.category === 'you' ? 'Xeno selfie easter egg' : `${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
                     {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answerSet === false ? '' : constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'], answerSet: true })}>{constraint.kind === 'endgame-confirmation' && <option value="">Choose result</option>}{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{constraint.kind === 'endgame-confirmation' ? answer === 'yes' ? 'Correct · inside zone' : 'Incorrect · outside zone' : answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
                     {prescribedDistances ? <>
@@ -1776,8 +2252,8 @@ export default function App() {
                             : 0,
                         )}</option>
                       </select></label>
-                      {distanceChoice === 'custom' && <label className="wide">Custom miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles ?? ''} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: event.target.value === '' ? undefined : Number(event.target.value) })} /></label>}
-                    </> : usesDistance && <label>Miles<input aria-label={`${constraint.name} distance in miles`} disabled={!!askedRecord} type="number" min="0.05" step="0.05" value={constraint.distanceMiles} onChange={(event) => patchConstraint(constraint.id, { distanceMiles: Number(event.target.value) })} /></label>}
+                      {distanceChoice === 'custom' && <label className="wide">Custom miles<CommitNumberInput ariaLabel={`${constraint.name} distance in miles`} disabled={!!askedRecord} value={constraint.distanceMiles} min={0.05} max={100} step={0.05} onCommit={(distanceMiles) => patchConstraint(constraint.id, { distanceMiles })} /></label>}
+                    </> : usesDistance && <label>Miles<CommitNumberInput ariaLabel={`${constraint.name} distance in miles`} disabled={!!askedRecord} value={constraint.distanceMiles} min={0.05} max={100} step={0.05} onCommit={(distanceMiles) => patchConstraint(constraint.id, { distanceMiles })} /></label>}
                     {constraint.kind === 'direction' && <label>Direction<select value={constraint.direction} onChange={(event) => patchConstraint(constraint.id, { direction: event.target.value as Constraint['direction'] })}>{['north', 'south', 'east', 'west'].map((direction) => <option key={direction}>{direction}</option>)}</select></label>}
                     {usesCategory && <label className="wide">Subject<select value={category} disabled={!!askedRecord} onChange={(event) => { const nextCategory = event.target.value; const tentacleMiles = constraint.kind === 'tentacle' ? 1 : constraint.distanceMiles; patchConstraint(constraint.id, { category: nextCategory, regionId: nextCategory === 'transit-route' ? scopedRoutes[0]?.id : nearestPoi(nextCategory, constraint.origin)?.id, distanceMiles: constraint.kind === 'matching-region' ? undefined : tentacleMiles }); }}>{categoryChoices.map((item) => <option key={item.id} value={item.id}>{askedChoiceLabel(item.label, askedUsesFor({ kind: constraint.kind, category: item.id }))}</option>)}</select></label>}
                     {constraint.kind === 'matching-region' && category === 'transit-route' && <label className="wide">Seeker’s moving transit service<select value={constraint.regionId ?? ''} disabled={!!askedRecord} onChange={(event) => patchConstraint(constraint.id, { regionId: event.target.value })}>{scopedRoutes.map((route) => <option key={route.id} value={route.id}>{transitRouteLabel(route)}</option>)}</select></label>}
@@ -1793,9 +2269,16 @@ export default function App() {
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{constraint.originSet === false ? 'set the seeker pin' : matchingSource ?? 'set the seeker pin'}</b></p>}
                   {usesOrigin && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : constraint.kind === 'endgame-confirmation' ? 'Pin believed to be inside the hiding zone' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
                   {usesTarget && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
-                  {solo && !askedRecord && <button type="button" className="full keep" disabled={!questionReady || soloBusy || Boolean(disablingCurse) || solo.phase === 'found' || solo.phase === 'gave-up' || soloQuestionBlocked} onClick={() => void askSolo(constraint)}>{soloQuestionBlocked ? 'Complete or resolve active curse first' : disablingCurse ? `Disabled by ${disablingCurse.name}` : soloBusy ? 'Xeno is answering…' : 'Ask Xeno'}</button>}
+                  {solo && !askedRecord && (previewBranches.length > 0 ? <div className="solo-preview-controls" aria-label={`Preview possible answers for ${constraint.name}`}>
+                    <span>Preview on map · thinking tool only</span>
+                    <div>{previewBranches.map((branch) => {
+                      const active = soloPreview?.constraintId === constraint.id && soloPreview.answer === branch.answer;
+                      return <button type="button" className={active ? 'active' : 'secondary'} aria-pressed={active} disabled={!questionReady} key={branch.answer} onClick={() => setSoloPreview(active ? undefined : { constraintId: constraint.id, answer: branch.answer, label: branch.label })}>{branch.label}</button>;
+                    })}<button type="button" className="secondary" disabled={soloPreview?.constraintId !== constraint.id} onClick={() => setSoloPreview(undefined)}>Current map</button></div>
+                  </div> : <p className="helper">This photo response does not create a geographic map cut.</p>)}
+                  {solo && !askedRecord && <button type="button" className="full keep" disabled={!questionReady || soloBusy || Boolean(solo.pausedAt) || Boolean(disablingCurse) || solo.phase === 'found' || solo.phase === 'gave-up' || soloQuestionBlocked} onClick={() => void askSolo(constraint)}>{solo.pausedAt ? 'Resume the timer to ask' : soloQuestionBlocked ? 'Complete or resolve active curse first' : disablingCurse ? `Disabled by ${disablingCurse.name}` : soloBusy ? 'Xeno is answering…' : 'Ask Xeno'}</button>}
                   <details className="rule-notes"><summary>Rulebook notes</summary>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate support' : selectedSubject.support === 'reference' ? 'Reference card' : selectedSubject.support === 'not-mapped' ? 'Returns “I cannot answer”' : 'Supported'}</b></p>}<ul>{orderedRuleNotes(constraint.kind, questionNotes, selectedSubject?.notes).map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</details>
-                  {!askedRecord && <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>}
+                  {!askedRecord && <button className="danger remove" onClick={() => { if (soloPreview?.constraintId === constraint.id) setSoloPreview(undefined); setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) })); }}>Remove question</button>}
                 </article>
               );
             })}
@@ -1809,8 +2292,8 @@ export default function App() {
               <dl>
                 <div><dt>Seeker ↔ Hider Helper</dt><dd>These are two views of one human workspace, not separate games. Switching modes carries the same questions, recorded answers, end-game status, station/route cuts, layers, and map viewport. The Hider Helper’s calculated answer is display-only and does not overwrite the recorded answer. Its private position remains available while this tab is open, but is hidden in Seeker mode and excluded from sharing.</dd></div>
                 <div><dt>Draft questions</dt><dd>A new question remains disabled and does not change the map until every required pin and option has been set. The card lists what is missing and enables itself when the last required field is completed; after that, Enabled can be switched off or on normally. No map-center or private hider location is used as an active draft answer.</dd></div>
-                <div><dt>Normal workspace</dt><dd>Edits live only in this browser tab. A refresh restores the configuration currently in the URL; without a <code>config</code> value, it starts fresh. Merely switching between Seeker and Hider Helper does not write anything to the URL or server.</dd></div>
-                <div><dt>Share URL</dt><dd>Choosing “Share map” writes a one-time snapshot of the human workspace into the URL; it is not live synchronization. It includes the selected human mode, question pins and recorded answers, end-game status, station/route cuts, layers, and viewport. The recipient can switch between Seeker and Hider Helper, but later edits in either browser do not carry over. The snapshot excludes the private hider position, current location, path trace, Solo session, route, central station, and hiding spot.</dd></div>
+                <div><dt>Normal workspace</dt><dd>Most edits live only in this browser tab. A refresh restores the configuration currently in the URL; without a <code>config</code> value, it otherwise starts fresh. The manual maximum-reach boundary is additionally saved in this browser for the current URL so drawing, applying, hiding, or clearing it survives refresh. Merely switching between Seeker and Hider Helper does not write anything to the URL or server.</dd></div>
+                <div><dt>Share URL</dt><dd>Choosing “Share map” creates a compact map-only snapshot and opens the device share sheet when available. It includes only active map-affecting constraints, visible/applied manual reach regions, station/route cuts, known layers, shading, radius, transit scope, and viewport. Pasted Maps URLs, custom question names and IDs, drafts, disabled questions, photo/end-game records, private hider state, current location, path traces, and the encrypted Solo session are omitted. Canonical pin links and question labels are regenerated when the map is restored.</dd></div>
                 <div><dt>Solo game</dt><dd>The encrypted 48-hour session token, card totals, question history, Solo board, and pre-Solo workspace are saved in this browser’s local storage. Refreshing this browser resumes it; another person or browser does not share the game.</dd></div>
                 <div><dt>Server</dt><dd>Solo requests are processed statelessly: the app has no game-session database. The server reads and replaces the encrypted token and calls Google for routing and Street View without putting the Solo secret in a share URL.</dd></div>
                 <div><dt>Temporary location data</dt><dd>Current-location display, path traces, and a manually dropped map pin remain in page memory and disappear on refresh. A GPS or pasted finish pin is sent to the server only when checking the Solo hiding spot.</dd></div>
@@ -1832,6 +2315,19 @@ export default function App() {
         <section className={`map-wrap${state.layers['sticky-map'] !== false && !traceScreenshot ? ' sticky-map' : ''}${traceScreenshot ? ' trace-screenshot' : ''}`} aria-label={traceScreenshot ? 'Trace-only screenshot view' : 'San Francisco feasible area map'}>
           {status !== 'ready' && <div className={`notice ${status}`} role="status">{status === 'loading' ? 'Loading map…' : message}</div>}
           <div ref={mapNode} className="map" />
+          {manualBoundaryEditing && <div className="map-boundary-badge" role="status"><b>Drawing reach boundary</b><span>Tap map · Region {Math.max(1, manualBoundaryDraft.findIndex((region) => region.id === activeBoundaryRegionId) + 1)} · {activeBoundaryRegion?.points.length ?? 0} points</span></div>}
+          {soloPreview && <div className="map-preview-badge" role="status"><b>Preview only</b><span>If Xeno answers {soloPreview.label}</span><button type="button" onClick={() => setSoloPreview(undefined)}>×</button></div>}
+          {focusedStationData && <section className="station-map-sheet" aria-label={`Selected station ${focusedStationData.name}`}>
+            <button type="button" className="station-sheet-close" aria-label="Close station controls" onClick={() => setFocusedStation(undefined)}>×</button>
+            <span>{state.stationStatuses[focusedStationData.id] === 'in' ? 'Kept in' : state.stationStatuses[focusedStationData.id] === 'out' ? 'Cut out' : eligibleIds.includes(focusedStationData.id) ? 'Currently possible' : 'Eliminated by map questions'}</span>
+            <strong>{focusedStationData.name}</strong>
+            <p>{routesForStation(focusedStationData.id).filter((routeId) => scopedRouteIds.has(routeId)).join(', ') || 'No mapped transit service'} · lines highlighted</p>
+            <div className="three-buttons">
+              <button type="button" className="keep" onClick={() => setEligibility('station', focusedStationData.id, 'in')}>Keep in</button>
+              <button type="button" className="danger" onClick={() => setEligibility('station', focusedStationData.id, 'out')}>Cut out</button>
+              <button type="button" className="secondary" onClick={() => setEligibility('station', focusedStationData.id, '')}>Clear</button>
+            </div>
+          </section>}
           {traceScreenshot && <button type="button" className="trace-screenshot-exit" onClick={toggleTraceScreenshot} aria-label="Exit trace screenshot view" title="Show map again">×</button>}
           {state.mode === 'hider' && traceActive && <div className="trace-map-controls" role="toolbar" aria-label="Active path tracing controls"><span>{tracePoints.length} points · {traceDistanceMiles < 0.1 ? `${Math.round(traceDistanceMiles * 5280)} ft` : `${traceDistanceMiles.toFixed(2)} mi`}</span><button type="button" className="secondary" disabled={tracePoints.length === 0} onClick={() => setTracePoints((current) => current.slice(0, -1))}>Undo</button><button type="button" className="danger" onClick={() => setTraceActive(false)}>Finish</button></div>}
           <div className="attribution">POIs: linked SF dataset · routes/coast: DataSF · basemap © Google</div>
@@ -1850,13 +2346,44 @@ export default function App() {
           />
           {soloStartPosition && <p className="success-line">Starting location ready</p>}
           <label className="stacked solo-datetime">Date and time · San Francisco<input type="datetime-local" value={soloDateTime} onChange={(event) => setSoloDateTime(event.target.value)} /></label>
-          <label className="stacked">Hiding time (minutes)<input type="number" min="5" max="180" step="5" value={soloHidingTimeMinutes} onChange={(event) => setSoloHidingTimeMinutes(Math.min(180, Math.max(5, Number(event.target.value) || 30)))} /></label>
-          <label className="stacked">Hiding-zone radius (miles)<input type="number" min="0.05" max="5" step="0.05" value={state.stationZoneMiles} onChange={(event) => setState((current) => ({ ...current, stationZoneMiles: Math.min(5, Math.max(0.05, Number(event.target.value) || 0.25)) }))} /></label>
+          <label className="stacked">Hiding time (minutes)<CommitNumberInput value={soloHidingTimeMinutes} min={5} max={180} step={5} integer onCommit={setSoloHidingTimeMinutes} /></label>
+          <label className="stacked">Hiding-zone radius (miles)<CommitNumberInput value={state.stationZoneMiles} min={0.05} max={5} step={0.05} onCommit={(stationZoneMiles) => setState((current) => ({ ...current, stationZoneMiles }))} /></label>
           <p className="helper">Google transit schedules support 7 days in the past through 100 days ahead.</p>
           <div className="two-buttons modal-actions">
             <button type="button" className="secondary" disabled={soloBusy} onClick={() => setSoloSetupOpen(false)}>Cancel</button>
             <button type="button" className="keep" disabled={soloBusy || !soloStartPosition} onClick={() => void startSolo()}>{soloBusy ? 'Finding a hiding spot…' : 'Start seeking'}</button>
           </div>
+        </section>
+      </div>}
+      {solo && soloAnswerSheet && <div className="modal-backdrop solo-answer-backdrop" role="presentation">
+        <section ref={soloAnswerSheetRef} className="modal solo-answer-sheet" role="dialog" aria-modal="true" aria-labelledby="solo-answer-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === 'Escape') setSoloAnswerSheet(undefined); }}>
+          <div className="solo-answer-heading"><span>{soloAnswerSheet.record.outcome === 'vetoed' ? 'Question vetoed' : 'Xeno answered'}</span><h2 id="solo-answer-title">{soloAnswerSheet.record.outcome === 'vetoed' ? 'No answer' : soloAnswerSheet.record.displayText}</h2><p>{soloAnswerSheet.questionName}</p></div>
+          {soloAnswerSheet.record.outcome === 'randomized' && <div className="solo-answer-detail randomized-result"><b>Question replaced</b><p><s>{soloAnswerSheet.record.randomizedFrom}</s><br />→ {soloAnswerSheet.record.randomizedTo}</p></div>}
+          {soloAnswerSheet.record.outcome === 'vetoed' ? <p className="solo-answer-detail">The question counts as asked, but Xeno gave no answer and received no card reward.</p> : <div className="solo-answer-stats"><span>Drew <b>{soloAnswerSheet.record.cardsDrawn}</b></span><span>Kept <b>{soloAnswerSheet.record.cardsKept}</b></span></div>}
+          {soloAnswerSheet.record.photoUrl && <img className="solo-answer-photo" src={soloAnswerSheet.record.photoUrl} alt={`${soloAnswerSheet.questionName} answer`} onError={(event) => { event.currentTarget.hidden = true; setMessage('The photo could not be loaded. The text answer remains available.'); }} />}
+          {soloAnswerCardActions.length > 0 && <section className="solo-answer-actions" aria-labelledby="solo-answer-actions-title"><h3 id="solo-answer-actions-title">Xeno also played</h3>{soloAnswerCardActions.map((announcement) => <p key={announcement}>{announcement}</p>)}</section>}
+          {soloAnswerSheet.fallbackMessage && <p className="warning-line">{soloAnswerSheet.fallbackMessage}</p>}
+          <button type="button" className="keep full solo-answer-continue" onClick={() => setSoloAnswerSheet(undefined)}>Continue</button>
+        </section>
+      </div>}
+      {solo && curseVetoEffectId && <div className="modal-backdrop" role="presentation">
+        <section className="modal curse-veto-modal" role="dialog" aria-modal="true" aria-labelledby="curse-veto-title">
+          <h2 id="curse-veto-title">Can’t do this curse</h2>
+          <p><b>{solo.cardState?.activeCurses.find((effect) => effect.id === curseVetoEffectId)?.name}</b></p>
+          <p className="helper">This discards the curse with no bonus. Xeno’s curse cooldown still counts.</p>
+          <label className="stacked">Reason<select value={curseVetoReason} onChange={(event) => setCurseVetoReason(event.target.value as typeof curseVetoReason)}><option value="not-available">Not available nearby</option><option value="unsafe">Unsafe or inaccessible</option><option value="closed">Closed, weather, or equipment</option><option value="other">Other</option></select></label>
+          <label className="stacked">Optional note<textarea maxLength={200} value={curseVetoNote} onChange={(event) => setCurseVetoNote(event.target.value)} /></label>
+          <div className="two-buttons modal-actions"><button type="button" className="secondary" onClick={() => setCurseVetoEffectId(undefined)}>Keep curse</button><button type="button" className="danger" disabled={soloBusy} onClick={() => { const effectId = curseVetoEffectId; setCurseVetoEffectId(undefined); void sendSoloCardEvent({ type: 'veto-infeasible', effectId, reason: curseVetoReason, note: curseVetoNote.trim() || undefined }); }}>Veto curse</button></div>
+        </section>
+      </div>}
+      {solo && gameSummaryOpen && solo.reveal && solo.reveal.reason !== 'peek' && <div className="modal-backdrop game-summary-backdrop" role="presentation">
+        <section className="modal game-summary" role="dialog" aria-modal="true" aria-labelledby="game-summary-title">
+          <div className="summary-hero"><span aria-hidden="true">{solo.reveal.reason === 'found' ? '★' : '◆'}</span><div><h2 id="game-summary-title">{solo.reveal.reason === 'found' ? 'You found Xeno!' : 'Round ended'}</h2><p>{solo.reveal.reason === 'found' ? `Found in ${formatElapsedTime(solo.reveal.elapsedHidingSeconds ?? 0)}` : 'Xeno’s hiding spot has been revealed.'}</p></div></div>
+          <div className="summary-score"><span>Final hider score</span><strong>{Math.floor((solo.reveal.elapsedHidingSeconds ?? 0) / 60) + (solo.reveal.timeBonusMinutes ?? 0)} min</strong><small>{Math.floor((solo.reveal.elapsedHidingSeconds ?? 0) / 60)} active + {solo.reveal.timeBonusMinutes ?? 0} bonus</small></div>
+          <dl className="summary-stats"><div><dt>Active time</dt><dd>{formatElapsedTime(solo.reveal.elapsedHidingSeconds ?? 0)}</dd></div><div><dt>Paused</dt><dd>{formatElapsedTime(solo.reveal.pausedSeconds ?? 0)} · {solo.reveal.pauseCount ?? 0}×</dd></div><div><dt>Questions</dt><dd>{solo.reveal.questionsAsked ?? Object.keys(solo.questions).length}</dd></div><div><dt>Xeno vetoes</dt><dd>{solo.reveal.xenoVetoes ?? 0}</dd></div><div><dt>Randomized</dt><dd>{solo.reveal.randomizations ?? 0}</dd></div><div><dt>Moves</dt><dd>{solo.reveal.movementHistory?.filter((move) => move.reason !== 'initial').length ?? 0}</dd></div></dl>
+          <section><h3>Curse and card review</h3>{solo.cardState?.playHistory.length ? <ol className="summary-history">{solo.cardState.playHistory.map((entry, index) => <li key={`${index}-${entry}`}>{entry}</li>)}</ol> : <p className="helper">No curse or card events were recorded.</p>}</section>
+          <details><summary>Route and final location</summary><p><b>Original start</b><br />{(solo.startPosition ?? solo.reveal.station.position).lat.toFixed(5)}, {(solo.startPosition ?? solo.reveal.station.position).lng.toFixed(5)}</p><p><b>Central station</b><br />{solo.reveal.station.name}</p><p><b>Journey</b><br />{Math.round(solo.reveal.route.durationSeconds / 60)} min · {solo.reveal.route.summary.join(' → ')}</p><div className="map-place-actions"><a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open final hiding pin</a></div></details>
+          <div className="two-buttons modal-actions"><button type="button" className="secondary" onClick={() => setGameSummaryOpen(false)}>Back to map</button><button type="button" className="keep" onClick={exitSolo}>Exit Solo</button></div>
         </section>
       </div>}
       {message && status === 'ready' && <button className="toast" role="status" onClick={() => setMessage('')} aria-label="Dismiss message">{message}</button>}

@@ -1,6 +1,7 @@
 import { jsonError, readJson, seal, unseal, type SecretSoloSession } from '../_solo-session';
 import { revealPayload } from '../_solo-reveal';
 import { publicCardState } from '../_solo-cards';
+import { finishSessionClock } from '../_solo-clock';
 
 export const config = { runtime: 'edge' };
 type RevealBody = { token?: string; resign?: boolean };
@@ -11,7 +12,10 @@ export default async function handler(request: Request) {
     const body = await readJson<RevealBody>(request);
     if (!body.token) return jsonError('Solo session token is required.');
     const session = await unseal<SecretSoloSession>(body.token, 'solo-session');
-    if (body.resign && session.phase !== 'found') session.phase = 'gave-up';
+    if (body.resign && session.phase !== 'found') {
+      session.phase = 'gave-up';
+      finishSessionClock(session);
+    }
     const reason = session.phase === 'found' ? 'found' : session.phase === 'gave-up' ? 'gave-up' : 'peek';
     const cardState = publicCardState(session);
     return Response.json({

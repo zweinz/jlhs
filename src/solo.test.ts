@@ -4,6 +4,7 @@ import { seal, unseal, type PhotoAsset, type SecretSoloSession, type StreetOrien
 import questionHandler, { randomizeCandidates } from '../api/solo/question';
 import streetOrientationHandler, { streetOrientationSvg } from '../api/solo/street-orientation';
 import cardEventHandler from '../api/solo/card-event';
+import clockHandler from '../api/solo/clock';
 import checkLocationHandler from '../api/solo/check-location';
 import revealHandler from '../api/solo/reveal';
 import {
@@ -23,6 +24,7 @@ import {
   SOLO_PHOTO_SUBJECTS,
   stationDifficulty,
   vetoedSoloConstraint,
+  formatElapsedTime,
 } from './solo';
 import { primaryTransitStationIds, validStations } from './transit';
 import { isHidingPositionAllowed } from './noHideZones';
@@ -106,9 +108,11 @@ describe('Solo camera and time rules', () => {
       version: 2, constraints: [], layers: {}, viewport: { center: spot, zoom: 13 }, mode: 'hider',
       stationZoneMiles: 1, areaDisplayMode: 'allowed-green', transitScope: 'primary',
       stationStatuses: {}, routeStatuses: {},
+      manualReachBoundary: { enabled: true, visible: true, regions: [{ id: 'old', points: [spot, station, { lat: 37.77, lng: -122.43 }] }] },
     };
     expect(soloStateForNewGame(base).transitScope).toBe('primary');
     expect(soloStateForNewGame(base).stationZoneMiles).toBe(1);
+    expect(soloStateForNewGame(base).manualReachBoundary).toMatchObject({ enabled: false, visible: true });
   });
 
   it('maps the supported Solo inventory to actual rulebook photo cards', () => {
@@ -451,6 +455,69 @@ describe('Solo token and card-session security', () => {
     }));
     const revealedBody = await revealed.json();
     expect(revealedBody.reveal.elapsedHidingSeconds).toBe(300);
+  });
+
+  it('pauses active time and shifts curse deadlines when resumed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-25T12:05:00.000Z'));
+    const value = session();
+    value.createdAt = '2026-08-25T12:00:00.000Z';
+    value.expiresAt = '2026-08-26T12:00:00.000Z';
+    value.activeEffects = [{
+      id: 'right', cardId: 'right-turn', cardInstance: 'right-turn#1', name: 'Curse of the Right Turn',
+      description: 'Turn right.', status: 'active', startedQuestion: 1, blocksQuestions: false, blocksTransit: false,
+      completionInstruction: 'Wait.', expiresAt: '2026-08-25T12:10:00.000Z',
+    }];
+    const pause = await clockHandler(new Request('https://example.test/api/solo/clock', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), action: 'pause' }),
+    }));
+    const paused = await pause.json();
+    expect(paused.clock).toMatchObject({ elapsedSeconds: 300, pauseCount: 1 });
+    const blockedQuestion = await questionHandler(new Request('https://example.test/api/solo/question', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: paused.token, constraint: {
+        id: 'radar', name: 'Radar', kind: 'radar', enabled: false, answer: 'yes',
+        origin: { lat: 37.77, lng: -122.44 }, distanceMiles: 1,
+      } }),
+    }));
+    expect(blockedQuestion.status).toBe(409);
+    vi.setSystemTime(new Date('2026-08-25T12:10:00.000Z'));
+    const peek = await revealHandler(new Request('https://example.test/api/solo/reveal', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: paused.token }),
+    }));
+    expect((await peek.json()).reveal.elapsedHidingSeconds).toBe(300);
+    const resume = await clockHandler(new Request('https://example.test/api/solo/clock', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: paused.token, action: 'resume' }),
+    }));
+    const resumed = await resume.json();
+    const restored = await unseal<SecretSoloSession>(resumed.token, 'solo-session');
+    expect(restored.totalPausedSeconds).toBe(300);
+    expect(restored.activeEffects?.[0].expiresAt).toBe('2026-08-25T12:15:00.000Z');
+    expect(formatElapsedTime(resumed.clock.elapsedSeconds)).toBe('5:00');
+  });
+
+  it('lets seekers veto an infeasible physical curse and rolls back its free-question benefit', async () => {
+    const value = session();
+    value.freeNextQuestion = true;
+    value.deck.usedPile = ['impressionable-consumer#1'];
+    value.activeEffects = [{
+      id: 'consumer', cardId: 'impressionable-consumer', cardInstance: 'impressionable-consumer#1',
+      name: 'Curse of the Impressionable Consumer', description: 'Act on an advertisement.', status: 'active',
+      startedQuestion: 1, blocksQuestions: true, blocksTransit: false, completionInstruction: 'Complete the task.',
+    }];
+    const response = await cardEventHandler(new Request('https://example.test/api/solo/card-event', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), event: { type: 'veto-infeasible', effectId: 'consumer', reason: 'not-available' } }),
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.cardState.activeCurses).toEqual([]);
+    expect(body.cardState.nextQuestionFree).toBe(false);
+    const restored = await unseal<SecretSoloSession>(body.token, 'solo-session');
+    expect(restored.deck.usedPile).not.toContain('impressionable-consumer#1');
+    expect(restored.deck.discardPile).toContain('impressionable-consumer#1');
+    expect(body.message).toMatch(/vetoed.*no bonus.*cooldown/i);
   });
 
   it('reports a newly kept card even when hand overflow discards an older card', async () => {

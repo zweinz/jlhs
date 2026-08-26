@@ -1,6 +1,6 @@
 import * as turf from '@turf/turf';
 import type { Feature, Polygon } from 'geojson';
-import type { Area, Constraint, Position } from './types';
+import type { Area, Constraint, ManualReachRegion, Position } from './types';
 import { pois, SF_BOUNDS, SF_CENTER, type PoiCategory } from './data';
 import { coastline, distanceToRoute, nearestCoastlineDistance, primaryTransitRoutes, validStations } from './transit';
 import {
@@ -24,6 +24,13 @@ const clipToFrame = (area: Area) =>
   (turf.intersect(turf.featureCollection([frame(), area])) as Area | null) ?? empty();
 const DISTANCE_CIRCLE_STEPS = 128;
 const DISTANCE_SAFETY_MILES = 0.001;
+const LOCAL_LONGITUDE_SCALE = Math.cos((SF_CENTER.lat * Math.PI) / 180);
+
+function localDistanceSquared(a: Position, b: Position) {
+  const x = (a.lng - b.lng) * LOCAL_LONGITUDE_SCALE;
+  const y = a.lat - b.lat;
+  return x * x + y * y;
+}
 
 function distanceCircle(position: Position, radiusMiles: number, keepInside: boolean) {
   const safeRadius = keepInside
@@ -43,8 +50,7 @@ export function nearestPoi(category: string, position: Position) {
   const candidates = pois.filter((poi) => poi.category === category);
   if (candidates.length === 0) return undefined;
   return candidates.reduce((nearest, candidate) =>
-    turf.distance(point(position), point(candidate), { units: 'miles' }) <
-    turf.distance(point(position), point(nearest), { units: 'miles' })
+    localDistanceSquared(position, candidate) < localDistanceSquared(position, nearest)
       ? candidate
       : nearest,
   );
@@ -104,7 +110,7 @@ function clipRectangleToBisector(start: Position, end: Position, hotter: boolean
   return turf.polygon([coordinates]) as Area;
 }
 
-function tentacleArea(constraint: Constraint) {
+function tentacleReachableArea(constraint: Constraint) {
   const category = constraint.category ?? 'museum';
   const reach = constraint.distanceMiles ?? 1;
   if (category === 'transit-route') {
@@ -112,8 +118,28 @@ function tentacleArea(constraint: Constraint) {
     const routeAreas = eligibleRoutes.map((route) =>
       unionAreas(route.features.map((feature) => turf.buffer(feature, reach, { units: 'miles', steps: 24 }) as Area)),
     );
-    const reachable = clipToFrame(unionAreas(routeAreas));
-    if (constraint.answer === 'not-within-reach' || constraint.answer === 'no') return invert(reachable);
+    return clipToFrame(unionAreas(routeAreas));
+  }
+  const eligibleSources = pois.filter(
+    (poi) =>
+      poi.category === category &&
+      turf.distance(point(constraint.origin), point(poi), { units: 'miles' }) <= reach,
+  );
+  return clipToFrame(unionAreas(
+    eligibleSources.map((poi) => distanceCircle(poi, reach, false)),
+  ));
+}
+
+function tentacleArea(constraint: Constraint) {
+  const category = constraint.category ?? 'museum';
+  const reach = constraint.distanceMiles ?? 1;
+  const reachable = tentacleReachableArea(constraint);
+  if (constraint.answer === 'not-within-reach' || constraint.answer === 'no') return invert(reachable);
+  if (category === 'transit-route') {
+    const eligibleRoutes = primaryTransitRoutes.filter((route) => distanceToRoute(constraint.origin, route) <= reach);
+    const routeAreas = eligibleRoutes.map((route) =>
+      unionAreas(route.features.map((feature) => turf.buffer(feature, reach, { units: 'miles', steps: 24 }) as Area)),
+    );
     const selectedIndex = eligibleRoutes.findIndex((route) => route.id === constraint.regionId);
     return selectedIndex >= 0 ? clipToFrame(routeAreas[selectedIndex]) : empty();
   }
@@ -122,10 +148,6 @@ function tentacleArea(constraint: Constraint) {
       poi.category === category &&
       turf.distance(point(constraint.origin), point(poi), { units: 'miles' }) <= reach,
   );
-  const reachable = unionAreas(
-    eligibleSources.map((poi) => distanceCircle(poi, reach, false)),
-  );
-  if (constraint.answer === 'not-within-reach' || constraint.answer === 'no') return invert(reachable);
   const selected = constraint.regionId ? pois.find((poi) => poi.id === constraint.regionId) : undefined;
   if (!selected || !eligibleSources.some((poi) => poi.id === selected.id)) return empty();
   let selectedArea = distanceCircle(selected, reach, true);
@@ -137,6 +159,25 @@ function tentacleArea(constraint: Constraint) {
     selectedArea = intersection as Area;
   }
   return clipToFrame(selectedArea);
+}
+
+export function questionPreviewArea(
+  constraint: Constraint,
+  answer: Constraint['answer'],
+  regions: Record<string, Area> = {},
+  stationZoneMiles = 0.25,
+) {
+  if (constraint.kind === 'photo-reference') return frame();
+  if (constraint.kind === 'endgame-confirmation') {
+    const inside = distanceCircle(constraint.origin, stationZoneMiles, true);
+    return answer === 'yes' ? inside : invert(inside);
+  }
+  if (constraint.kind === 'tentacle') {
+    const reachable = tentacleReachableArea(constraint);
+    return answer === 'yes' ? reachable : invert(reachable);
+  }
+  if (answer === 'null') return frame();
+  return constraintArea({ ...constraint, answer }, regions);
 }
 
 export function constraintArea(constraint: Constraint, regions: Record<string, Area> = {}): Area {
@@ -244,14 +285,19 @@ export function combineConstraints(
 export function partition(category: PoiCategory) {
   const selected = pois.filter((poi) => poi.category === category);
   const collection = turf.featureCollection(
-    selected.map((poi) => turf.point([poi.lng, poi.lat], { id: poi.id, name: poi.name })),
+    selected.map((poi) => turf.point([poi.lng * LOCAL_LONGITUDE_SCALE, poi.lat], { id: poi.id, name: poi.name })),
   );
   const voronoi = turf.voronoi(collection, {
-    bbox: [SF_BOUNDS.west, SF_BOUNDS.south, SF_BOUNDS.east, SF_BOUNDS.north],
+    bbox: [SF_BOUNDS.west * LOCAL_LONGITUDE_SCALE, SF_BOUNDS.south, SF_BOUNDS.east * LOCAL_LONGITUDE_SCALE, SF_BOUNDS.north],
   });
   const regions: Record<string, Area> = {};
   voronoi.features.forEach((feature, index) => {
-    if (feature) regions[selected[index].id] = feature as Area;
+    if (!feature) return;
+    feature.geometry.coordinates = feature.geometry.coordinates.map((ring) =>
+      ring.map(([lng, lat]) => [lng / LOCAL_LONGITUDE_SCALE, lat]),
+    );
+    const id = typeof feature.properties?.id === 'string' ? feature.properties.id : selected[index]?.id;
+    if (id) regions[id] = feature as Area;
   });
   return regions;
 }
@@ -261,6 +307,20 @@ export function stationZoneArea(stationIds: string[], radiusMiles: number) {
   return unionAreas(
     selected.map((station) => turf.circle(point(station), radiusMiles, { units: 'miles', steps: 24 }) as Area),
   );
+}
+
+export function manualReachArea(regions: ManualReachRegion[]) {
+  const areas = regions.flatMap((region) => {
+    if (region.points.length < 3) return [];
+    const ring = region.points.map((position) => [position.lng, position.lat]);
+    ring.push(ring[0]);
+    try {
+      return [turf.polygon([ring]) as Area];
+    } catch {
+      return [];
+    }
+  });
+  return clipToFrame(unionAreas(areas));
 }
 
 export function stationIdsOverlappingArea(stationIds: string[], radiusMiles: number, area: Area) {

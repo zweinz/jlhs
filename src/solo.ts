@@ -82,6 +82,7 @@ export type SoloPublicEffect = {
   failureBonusMinutes?: number;
   citationUrl?: string;
   placeName?: string;
+  placePosition?: Position;
   mazeSvg?: string;
   hangmanPattern?: string;
   hangmanWrong?: string[];
@@ -93,12 +94,23 @@ export type SoloPublicEffect = {
   canClear?: boolean;
   canCompleteTask?: boolean;
   canReportFailure?: boolean;
+  canVetoInfeasible?: boolean;
   castingInstruction?: string;
   completionInstruction: string;
   failureInstruction?: string;
   imageUrl?: string;
   detail?: string;
   lockedUntil?: string;
+};
+
+export type SoloMapEvidence = {
+  id: string;
+  kind: 'closer-to';
+  label: string;
+  nearer: Position;
+  farther: Position;
+  placeName?: string;
+  positionRevision: number;
 };
 
 export type SoloPublicCardState = {
@@ -131,6 +143,7 @@ export type SoloPublicCardState = {
     available: boolean;
   };
   bonusMinutes: number;
+  evidence?: SoloMapEvidence[];
 };
 
 export function publicSoloDisplayText(kind: Constraint['kind'], displayText: string) {
@@ -165,6 +178,11 @@ export type SoloReveal = {
   cards?: { played: string[]; discarded: string[]; remainingHand: string[] };
   elapsedHidingSeconds?: number;
   timeBonusMinutes?: number;
+  pausedSeconds?: number;
+  pauseCount?: number;
+  questionsAsked?: number;
+  xenoVetoes?: number;
+  randomizations?: number;
 };
 
 export type SoloClientSession = {
@@ -176,6 +194,11 @@ export type SoloClientSession = {
   stationZoneMiles: number;
   phase: SoloPhase;
   departureTime: string;
+  createdAt: string;
+  startPosition: Position;
+  pausedAt?: string;
+  totalPausedSeconds?: number;
+  pauseCount?: number;
   questions: Record<string, SoloQuestionRecord>;
   humanState: SharedState;
   boardState: SharedState;
@@ -183,7 +206,25 @@ export type SoloClientSession = {
   cardState?: SoloPublicCardState;
 };
 
-export type SoloStartResponse = Pick<SoloClientSession, 'token' | 'cardsDrawn' | 'cardsKept' | 'questionUses' | 'hidingTimeMinutes' | 'stationZoneMiles' | 'phase' | 'departureTime' | 'cardState'>;
+export type SoloStartResponse = Pick<SoloClientSession, 'token' | 'cardsDrawn' | 'cardsKept' | 'questionUses' | 'hidingTimeMinutes' | 'stationZoneMiles' | 'phase' | 'departureTime' | 'createdAt' | 'startPosition' | 'pausedAt' | 'totalPausedSeconds' | 'pauseCount' | 'cardState'>;
+
+export function elapsedSoloSeconds(
+  session: Pick<SoloClientSession, 'createdAt' | 'pausedAt' | 'totalPausedSeconds'>,
+  now = Date.now(),
+) {
+  const end = session.pausedAt ? Date.parse(session.pausedAt) : now;
+  return Math.max(0, Math.floor((end - Date.parse(session.createdAt)) / 1000) - (session.totalPausedSeconds ?? 0));
+}
+
+export function formatElapsedTime(seconds: number) {
+  const safe = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const remainder = safe % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+    : `${minutes}:${String(remainder).padStart(2, '0')}`;
+}
 
 export function canonicalQuestionKey(constraint: Pick<Constraint, 'kind' | 'distanceMiles' | 'category'>) {
   if (constraint.kind === 'radar' || constraint.kind === 'thermometer') {
@@ -374,6 +415,9 @@ export function soloStateForNewGame(base: SharedState): SharedState {
     hiderPosition: undefined,
     hiderMapUrl: undefined,
     endGameActive: false,
+    manualReachBoundary: base.manualReachBoundary
+      ? { ...base.manualReachBoundary, enabled: false }
+      : undefined,
   };
 }
 

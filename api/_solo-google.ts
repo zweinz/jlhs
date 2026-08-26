@@ -317,8 +317,8 @@ export async function photoTargetInZone(
       ? await nearbyPlaceCandidates(station, spec, stationZoneMiles)
       : { candidates: localPhotoCandidates(targetKind) };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : 'the place lookup failed';
-    return { unavailableReason: `target lookup is unavailable: ${detail}` };
+    console.warn('[Solo photo target lookup unavailable]', error instanceof Error ? error.name : 'unknown');
+    return { unavailableReason: 'the photo target service is temporarily unavailable' };
   }
   if (lookup.error) return { unavailableReason: lookup.error };
   const candidates = lookup.candidates

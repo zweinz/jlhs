@@ -9,6 +9,7 @@ async function apiHandler(pathname: string): Promise<EdgeHandler | undefined> {
   if (pathname === '/api/solo/start') return (await import('./api/solo/start')).default;
   if (pathname === '/api/solo/question') return (await import('./api/solo/question')).default;
   if (pathname === '/api/solo/card-event') return (await import('./api/solo/card-event')).default;
+  if (pathname === '/api/solo/clock') return (await import('./api/solo/clock')).default;
   if (pathname === '/api/solo/check-location') return (await import('./api/solo/check-location')).default;
   if (pathname === '/api/solo/reveal') return (await import('./api/solo/reveal')).default;
   if (pathname === '/api/solo/photo') return (await import('./api/solo/photo')).default;

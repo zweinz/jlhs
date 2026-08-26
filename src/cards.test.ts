@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CARD_CATALOG, UNPLAYABLE_AI_CURSES, cardIdFromInstance, createDeck, deckCatalogCount, drawReward, enforceHandLimit, type CardInstanceId } from './cards';
-import { GEMINI_BUDGET_CONSTANTS, chooseCardStrategy } from '../api/_solo-gemini';
-import { SPOTTY_MEMORY_CATEGORIES, advancePersistentEffects, curseCadenceAllows, deterministicMazeSvg, fallbackKeep, finalTimeBonusMinutes, legalPostAnswerCards, legalResponseCards, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardState } from '../api/_solo-cards';
+import { GEMINI_BUDGET_CONSTANTS, chooseCardStrategy, groundedPlace } from '../api/_solo-gemini';
+import { SOLO_MAZE_SIZE, SPOTTY_MEMORY_CATEGORIES, advancePersistentEffects, curseCadenceAllows, deterministicMazeSvg, fallbackKeep, finalTimeBonusMinutes, legalPostAnswerCards, legalResponseCards, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardState } from '../api/_solo-cards';
 import type { SecretSoloSession } from '../api/_solo-session';
 import type { Constraint } from './types';
 
@@ -99,14 +99,26 @@ describe('official Xeno hider deck', () => {
     expect(preferredEarlyPowerupPlay(session)).toBeUndefined();
   });
 
-  it('records the named cards discarded and drawn by a hand-cycling power-up', () => {
+  it('resolves a hand-cycling power-up privately without a public announcement or history entry', () => {
     const session = sessionWithHand(['time-2#1', 'time-6#1', 'discard-1-draw-2#1'], 3);
+    expect(publicCardState(session).handCards).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'discard-1-draw-2', name: 'Discard 1, draw 2' }),
+    ]));
     session.deck!.drawPile = ['time-4#1', 'veto#1'];
     const result = playPostAnswerCard(session, 'discard-1-draw-2#1');
     expect(result.played).toBe(true);
-    expect(result.announcement).toBe('Xeno played Discard 1, draw 2.');
-    expect(result.announcement).not.toMatch(/discarded|drew/i);
-    expect(session.recentDecisions?.at(-1)).toMatch(/Discard 1, draw 2.*discarded 2-minute time bonus.*drew 4-minute time bonus, Veto question/i);
+    expect(result.announcement).toBeUndefined();
+    expect(session.recentDecisions?.at(-1)).toMatch(/^\[private\].*Discard 1, draw 2.*discarded 2-minute time bonus.*drew 4-minute time bonus, Veto question/i);
+    expect(publicCardState(session).playHistory).toEqual([]);
+  });
+
+  it('also keeps Duplicate copying a discard-and-draw power-up private', () => {
+    const session = sessionWithHand(['time-2#1', 'discard-1-draw-2#1', 'duplicate#1'], 3);
+    session.deck.drawPile = ['time-4#1', 'veto#1'];
+    const result = playPostAnswerCard(session, 'duplicate#1');
+    expect(result).toMatchObject({ played: true, announcement: undefined });
+    expect(session.recentDecisions?.at(-1)).toMatch(/^\[private\].*Duplicate another card as Discard 1, draw 2/i);
+    expect(publicCardState(session).playHistory).toEqual([]);
   });
 
   it('does not expose the remaining physical-only curses as legal plays', () => {
@@ -287,7 +299,10 @@ describe('official Xeno hider deck', () => {
   it('generates the same solvable maze representation from the same seed', () => {
     const first = deterministicMazeSvg('game:4');
     expect(first).toBe(deterministicMazeSvg('game:4'));
-    expect(first).toContain('<svg');
+    expect(SOLO_MAZE_SIZE).toBe(21);
+    expect(first).toContain('viewBox="0 0 294 294"');
+    expect(first.match(/<path /g)?.length).toBeGreaterThan(400);
+    expect(first).toContain('Challenging 21 by 21 solvable maze');
     expect(first).toContain('START');
     expect(first).toContain('END');
   });
@@ -342,6 +357,26 @@ describe('Gemini hard budget', () => {
     expect(request.response_format.schema).toEqual(expect.objectContaining({ type: 'object' }));
     expect(request.response_format).not.toHaveProperty('json_schema');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('links a grounded destination to the validated structured point, not an unrelated citation', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({
+        output_text: JSON.stringify({
+          name: 'Sunset Reservoir Park', lat: 37.769, lng: -122.441,
+          citationUrl: 'https://www.google.com/maps/place/Golden+Gate+Park',
+        }),
+        citations: ['https://www.google.com/maps/place/Golden+Gate+Park'],
+        usage: { total_input_tokens: 80, total_output_tokens: 12 },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const session = strategySession();
+    const place = await groundedPlace(session, 'mediocre-travel-agent', { lat: 37.77, lng: -122.44 });
+    expect(place).toMatchObject({ name: 'Sunset Reservoir Park', position: { lat: 37.769, lng: -122.441 } });
+    expect(place?.citationUrl).toContain('query=37.769%2C-122.441');
+    expect(place?.citationUrl).not.toMatch(/Golden.Gate.Park/i);
   });
 
   it('lets Gemini play a card it keeps from the current draw', async () => {

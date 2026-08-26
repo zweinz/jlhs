@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as turf from '@turf/turf';
 import { excludeAllExcept, setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
 import { PARTITION_CATEGORIES, pois, provenance, validatePois } from './data';
-import { activePoiPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
-import { combineConstraints, constraintArea, excludedArea, partition, partitionLabelPosition, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
+import { activeMapPartition, activePoiPartition, selectMapPartition, selectPoiPartition, VISIBLE_POI_PARTITIONS } from './layers';
+import { persistManualReachBoundary, restoreManualReachBoundary } from './manualReachStorage';
+import { combineConstraints, constraintArea, excludedArea, manualReachArea, nearestPoi, partition, partitionLabelPosition, positionInArea, questionPreviewArea, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer, solveHiderQuestion } from './hider';
 import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, RULEBOOK_DISTANCE_CHOICES } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, SF_MATCHING_SUBJECTS, selectableSubjects } from './rulebook';
@@ -494,6 +495,17 @@ it('keeps POI partition layers mutually exclusive and allows all of them to be o
   expect(VISIBLE_POI_PARTITIONS.filter((category) => libraries[category])).toEqual(['library']);
 });
 
+it('uses one dropdown selection across geographic and POI partitions', () => {
+  const districts = selectMapPartition({ museum: true, 'zip-codes': true }, 'supervisor-districts');
+  expect(activeMapPartition(districts)).toBe('supervisor-districts');
+  expect(districts.museum).toBe(false);
+  expect(districts['zip-codes']).toBe(false);
+  const hospitals = selectMapPartition(districts, 'hospital');
+  expect(activeMapPartition(hospitals)).toBe('hospital');
+  expect(hospitals['supervisor-districts']).toBe(false);
+  expect(selectMapPartition(hospitals)).toMatchObject({ hospital: false, 'supervisor-districts': false });
+});
+
 const state: SharedState = {
   version: 2,
   constraints: [base('radar')],
@@ -508,10 +520,140 @@ const state: SharedState = {
   endGameActive: false,
 };
 
-it('round trips versioned shared state', () => expect(decodeState(encodeState(state))).toEqual(state));
-it('defaults old version 2 shares to green allowed-area shading', () => {
+it('round trips the same active map through the stripped version-4 share format', () => {
+  const encoded = encodeState(state);
+  const restored = decodeState(encoded);
+  expect(encodeState(restored)).toBe(encoded);
+  expect(restored).toMatchObject({
+    mode: 'seeker',
+    viewport: state.viewport,
+    stationZoneMiles: state.stationZoneMiles,
+    areaDisplayMode: state.areaDisplayMode,
+    transitScope: state.transitScope,
+    layers: { museum: true, 'station-zones': true, 'sticky-map': true, 'partition-pins': true },
+  });
+  expect(restored.constraints).toHaveLength(1);
+  expect(restored.constraints[0]).toMatchObject({
+    id: 'shared-1', name: 'Radar', kind: 'radar', enabled: true, answer: 'yes',
+    origin: state.constraints[0].origin, distanceMiles: 1,
+  });
+  expect(restored.constraints[0]).not.toHaveProperty('target');
+  expect(restored.constraints[0]).not.toHaveProperty('category');
+  expect(turf.area(constraintArea(restored.constraints[0]))).toBeCloseTo(turf.area(constraintArea(state.constraints[0])));
+});
+it('round trips a user-researched maximum reach boundary', () => {
+  const bounded: SharedState = {
+    ...state,
+    manualReachBoundary: {
+      enabled: true,
+      visible: true,
+      regions: [{
+        id: 'research-1',
+        points: [
+          { lat: 37.78, lng: -122.48 },
+          { lat: 37.78, lng: -122.42 },
+          { lat: 37.73, lng: -122.45 },
+        ],
+      }],
+    },
+  };
+  const encoded = encodeState(bounded);
+  const restored = decodeState(encoded);
+  expect(encodeState(restored)).toBe(encoded);
+  expect(restored.manualReachBoundary).toMatchObject({
+    enabled: true,
+    visible: true,
+    regions: [{ points: bounded.manualReachBoundary?.regions[0].points }],
+  });
+  expect(() => validateState({ ...bounded, manualReachBoundary: { ...bounded.manualReachBoundary!, regions: [{ id: 'bad', points: bounded.manualReachBoundary!.regions[0].points.slice(0, 2) }] } })).toThrow(/manual reach/i);
+  const legacyMetadata = structuredClone(bounded) as unknown as { manualReachBoundary: { regions: Array<Record<string, unknown>> } };
+  legacyMetadata.manualReachBoundary.regions[0].note = 'Remove me';
+  legacyMetadata.manualReachBoundary.regions[0].sourceUrl = 'https://example.com';
+  legacyMetadata.manualReachBoundary.regions[0].travelTimeMinutes = 60;
+  expect(validateState(legacyMetadata).manualReachBoundary?.regions[0]).toEqual(bounded.manualReachBoundary?.regions[0]);
+});
+
+it('omits every non-map question field from version-4 shares', () => {
+  const longMapUrl = `https://www.google.com/maps/search/?api=1&query=${'x'.repeat(900)}`;
+  const mapOnly: SharedState = {
+    ...state,
+    mode: 'hider',
+    endGameActive: true,
+    hiderPosition: { lat: 37.76, lng: -122.45 },
+    constraints: [
+      { ...base('radar'), id: 'private-id', name: 'Custom secret label', originMapUrl: longMapUrl },
+      { ...base('measuring'), id: 'disabled', enabled: false },
+      { ...base('photo-reference'), id: 'photo' },
+      { ...base('endgame-confirmation'), id: 'endgame' },
+      { ...base('matching-region'), id: 'null', answer: 'null' },
+    ],
+    layers: { ...state.layers, ignoredLayer: true },
+  };
+  const encoded = encodeState(mapOnly);
+  expect(encoded.length).toBeLessThan(1_000);
+  const normalized = encoded.replaceAll('-', '+').replaceAll('_', '/');
+  const wire = decodeURIComponent(escape(atob(normalized + '='.repeat((4 - normalized.length % 4) % 4))));
+  expect(JSON.parse(wire)).toMatchObject({ v: 4 });
+  expect(wire).not.toContain('Custom secret label');
+  expect(wire).not.toContain('google.com');
+  expect(wire).not.toContain('private-id');
+  const restored = decodeState(encoded);
+  expect(restored.constraints.map((constraint) => constraint.kind)).toEqual(['radar']);
+  expect(restored.mode).toBe('seeker');
+  expect(restored.endGameActive).toBe(false);
+  expect(restored.hiderPosition).toBeUndefined();
+  expect(restored.layers).not.toHaveProperty('ignoredLayer');
+});
+
+it('keeps a maximum-size manual boundary below the text-message budget', () => {
+  const points = Array.from({ length: 200 }, (_, index) => {
+    const angle = index * 2 * Math.PI / 200;
+    return { lat: 37.76 + Math.sin(angle) * 0.02, lng: -122.44 + Math.cos(angle) * 0.025 };
+  });
+  const encoded = encodeState({
+    ...state,
+    manualReachBoundary: { enabled: true, visible: true, regions: [{ id: 'large', points }] },
+  });
+  expect(encoded.length).toBeLessThan(3_000);
+  expect(decodeState(encoded).manualReachBoundary?.regions[0].points).toHaveLength(200);
+});
+
+it('persists the latest manual boundary only for the current share URL', () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  const boundary: NonNullable<SharedState['manualReachBoundary']> = {
+    enabled: true,
+    visible: true,
+    regions: [{ id: 'local', points: [
+      { lat: 37.78, lng: -122.48 },
+      { lat: 37.78, lng: -122.42 },
+      { lat: 37.73, lng: -122.45 },
+    ] }],
+  };
+  persistManualReachBoundary(storage, 'config-a', boundary);
+  expect(restoreManualReachBoundary(storage, 'config-a')).toEqual({ matched: true, boundary });
+  expect(restoreManualReachBoundary(storage, 'config-b')).toEqual({ matched: false });
+  persistManualReachBoundary(storage, 'config-a', undefined);
+  expect(restoreManualReachBoundary(storage, 'config-a')).toEqual({ matched: true, boundary: undefined });
+});
+it('keeps a fully marked station board compact enough for messaging', () => {
+  const marked = {
+    ...state,
+    stationStatuses: Object.fromEntries(validStations.map((station, index) => [station.id, index % 2 ? 'in' : 'out'])),
+    routeStatuses: Object.fromEntries(transitRoutes.map((route, index) => [route.id, index % 2 ? 'out' : 'in'])),
+  } as SharedState;
+  const encoded = encodeState(marked);
+  expect(encoded.length).toBeLessThan(2000);
+  expect(decodeState(encoded).stationStatuses).toEqual(marked.stationStatuses);
+  expect(decodeState(encoded).routeStatuses).toEqual(marked.routeStatuses);
+});
+it('defaults old version 2 shares to transparent allowed and red excluded shading', () => {
   const { areaDisplayMode: _areaDisplayMode, transitScope: _transitScope, ...oldState } = state;
-  expect(validateState(oldState)).toMatchObject({ areaDisplayMode: 'allowed-green', transitScope: 'all', layers: { 'sticky-map': true } });
+  expect(validateState(oldState)).toMatchObject({ areaDisplayMode: 'excluded-red', transitScope: 'all', layers: { 'sticky-map': true } });
 });
 it('defaults the sticky map on and removes the retired coastline overlay', () => {
   expect(validateState({ ...state, layers: { coastline: true } }).layers).toEqual({ 'sticky-map': true });
@@ -519,9 +661,58 @@ it('defaults the sticky map on and removes the retired coastline overlay', () =>
 it('migrates a valid version 1 share payload', () => {
   const legacy = { version: 1, constraints: [base('radius')], layers: { museum: true }, viewport: state.viewport };
   const payload = btoa(unescape(encodeURIComponent(JSON.stringify(legacy)))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-  expect(decodeState(payload)).toMatchObject({ version: 2, stationZoneMiles: 0.25, areaDisplayMode: 'allowed-green', transitScope: 'all', mode: 'seeker' });
+  expect(decodeState(payload)).toMatchObject({ version: 2, stationZoneMiles: 0.25, areaDisplayMode: 'excluded-red', transitScope: 'all', mode: 'seeker' });
+});
+it('continues to restore version-3 compact share payloads', () => {
+  const emptyStatuses = (count: number) => btoa('\0'.repeat(Math.ceil(count / 4))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  const wire = {
+    v: 3,
+    state,
+    stations: emptyStatuses(validStations.length),
+    routes: emptyStatuses(transitRoutes.length),
+  };
+  const payload = btoa(unescape(encodeURIComponent(JSON.stringify(wire)))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  expect(decodeState(payload)).toMatchObject(state);
 });
 it('rejects malformed shared configurations', () => {
   expect(() => decodeState('garbage')).toThrow();
   expect(() => validateState({ version: 3 })).toThrow();
+});
+
+it('uses the same projected nearest-hospital rule for answers and visible partitions', () => {
+  const lincolnAnd21st = { lat: 37.766, lng: -122.4795 };
+  const nearest = nearestPoi('hospital', lincolnAnd21st);
+  expect(nearest?.name).toBe('UCSF Medical Center Parnassus');
+  expect(nearest && positionInArea(lincolnAnd21st, partition('hospital')[nearest.id])).toBe(true);
+});
+
+it('previews positive and inverse Solo branches without mutating the draft', () => {
+  const draft = { ...base('radar'), answer: 'yes' as const, distanceMiles: 0.25 };
+  const original = structuredClone(draft);
+  const yes = questionPreviewArea(draft, 'yes');
+  const no = questionPreviewArea(draft, 'no');
+  expect(positionInArea(draft.origin, yes)).toBe(true);
+  expect(positionInArea(draft.origin, no)).toBe(false);
+  expect(draft).toEqual(original);
+});
+
+it('builds disconnected manual reach regions only from user-supplied vertices', () => {
+  const area = manualReachArea([{
+    id: 'west',
+    points: [
+      { lat: 37.79, lng: -122.50 },
+      { lat: 37.79, lng: -122.46 },
+      { lat: 37.75, lng: -122.48 },
+    ],
+  }, {
+    id: 'east',
+    points: [
+      { lat: 37.79, lng: -122.42 },
+      { lat: 37.79, lng: -122.39 },
+      { lat: 37.76, lng: -122.405 },
+    ],
+  }]);
+  expect(positionInArea({ lat: 37.78, lng: -122.48 }, area)).toBe(true);
+  expect(positionInArea({ lat: 37.78, lng: -122.405 }, area)).toBe(true);
+  expect(positionInArea({ lat: 37.77, lng: -122.44 }, area)).toBe(false);
 });

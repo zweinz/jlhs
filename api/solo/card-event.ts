@@ -2,6 +2,7 @@ import { CARD_CATALOG } from '../../src/cards';
 import { addDecision, publicCardState, reconcileCardEffects } from '../_solo-cards';
 import { jsonError, readJson, seal, unseal, type SecretSoloSession } from '../_solo-session';
 import { isHidingPositionAllowed } from '../../src/noHideZones';
+import { requireRunningSession, SoloPausedError } from '../_solo-clock';
 
 export const config = { runtime: 'edge' };
 
@@ -9,6 +10,7 @@ type CardEventBody = {
   token?: string;
   event?:
     | { type: 'accept-pending' | 'reject-pending' | 'clear' | 'complete-task' | 'report-failure'; effectId: string }
+    | { type: 'veto-infeasible'; effectId: string; reason: 'not-available' | 'unsafe' | 'closed' | 'other'; note?: string }
     | { type: 'hangman-guess'; effectId: string; guess: string };
 };
 
@@ -18,6 +20,7 @@ export default async function handler(request: Request) {
     const body = await readJson<CardEventBody>(request);
     if (!body.token || !body.event || typeof body.event.effectId !== 'string') return jsonError('The card event is incomplete.');
     const session = await unseal<SecretSoloSession>(body.token, 'solo-session');
+    requireRunningSession(session);
     reconcileCardEffects(session);
     const effect = session.activeEffects?.find((candidate) => candidate.id === body.event!.effectId);
     if (!effect) return jsonError('That curse is no longer active.', 404);
@@ -47,6 +50,23 @@ export default async function handler(request: Request) {
       session.deck.usedPile = session.deck.usedPile.filter((instance) => instance !== effect.cardInstance);
       session.deck.discardPile.push(effect.cardInstance);
       message = `${effect.name} was rejected and discarded. The every-other-question cooldown remains.`;
+    } else if (body.event.type === 'veto-infeasible') {
+      const resolution = CARD_CATALOG[effect.cardId].resolution;
+      if (effect.status !== 'active' || (resolution !== 'manual-clear' && resolution !== 'task-then-persistent')) {
+        return jsonError(`${effect.name} cannot be vetoed as infeasible.`, 409);
+      }
+      if (!['not-available', 'unsafe', 'closed', 'other'].includes(body.event.reason) || (body.event.note?.length ?? 0) > 200) {
+        return jsonError('Choose a valid infeasibility reason and keep the note under 200 characters.');
+      }
+      session.activeEffects = session.activeEffects?.filter((candidate) => candidate.id !== effect.id);
+      session.deck.usedPile = session.deck.usedPile.filter((instance) => instance !== effect.cardInstance);
+      if (!session.deck.discardPile.includes(effect.cardInstance)) session.deck.discardPile.push(effect.cardInstance);
+      if (effect.cardId === 'impressionable-consumer') session.freeNextQuestion = false;
+      const reason = body.event.reason === 'not-available' ? 'not available nearby'
+        : body.event.reason === 'unsafe' ? 'unsafe or inaccessible'
+          : body.event.reason === 'closed' ? 'closed, weather, or missing equipment'
+            : body.event.note?.trim() || 'not doable';
+      message = `${effect.name} was vetoed by the seekers as ${reason}. No bonus was awarded; the curse cooldown still counts.`;
     } else if (body.event.type === 'clear') {
       if (CARD_CATALOG[effect.cardId].resolution !== 'manual-clear' || effect.status !== 'active') {
         return jsonError(`${effect.name} cannot be cleared manually.`, 409);
@@ -113,6 +133,6 @@ export default async function handler(request: Request) {
       headers: { 'cache-control': 'no-store' },
     });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : 'Could not apply the card event.', 400);
+    return jsonError(error instanceof Error ? error.message : 'Could not apply the card event.', error instanceof SoloPausedError ? 409 : 400);
   }
 }

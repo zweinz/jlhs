@@ -3,6 +3,7 @@ import type { Position } from '../../src/types';
 import { jsonError, readJson, seal, unseal, type SecretSoloSession } from '../_solo-session';
 import { revealPayload } from '../_solo-reveal';
 import { publicCardState } from '../_solo-cards';
+import { finishSessionClock, requireRunningSession, SoloPausedError } from '../_solo-clock';
 
 export const config = { runtime: 'edge' };
 type CheckBody = { token?: string; position?: Position };
@@ -19,9 +20,11 @@ export default async function handler(request: Request) {
       const cardState = publicCardState(session);
       return Response.json({ token: await seal(session), phase: session.phase, cardState, reveal: await revealPayload(session, session.phase === 'found' ? 'found' : 'gave-up') }, { headers: { 'cache-control': 'no-store' } });
     }
+    requireRunningSession(session);
     const spotDistance = distanceMeters(body.position, session.spot);
     if (spotDistance <= 30) {
       session.phase = 'found';
+      finishSessionClock(session);
       const cardState = publicCardState(session);
       return Response.json({
         token: await seal(session), phase: session.phase, message: 'You found Xeno.',
@@ -42,6 +45,6 @@ export default async function handler(request: Request) {
     const cardState = publicCardState(session);
     return Response.json({ token: await seal(session), phase: session.phase, cardState, message: 'Not found yet.' }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : 'Could not check that location.', 400);
+    return jsonError(error instanceof Error ? error.message : 'Could not check that location.', error instanceof SoloPausedError ? 409 : 400);
   }
 }

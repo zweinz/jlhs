@@ -1,5 +1,5 @@
 import type { Position, TransitScope } from '../src/types';
-import type { SoloPhase } from '../src/solo';
+import type { SoloMapEvidence, SoloPhase } from '../src/solo';
 import { normalizeQuestionUses } from '../src/solo';
 import type { CardId, CardInstanceId, DeckState } from '../src/cards';
 
@@ -10,6 +10,7 @@ export type SecretSoloSession = {
   version: 2;
   sessionId: string;
   createdAt: string;
+  startPosition?: Position;
   expiresAt: string;
   departureTime: string;
   transitScope: TransitScope;
@@ -37,6 +38,13 @@ export type SecretSoloSession = {
   blockedQuestionKeys?: string[];
   activeEffects?: SoloEffectState[];
   bonusMinutes?: number;
+  pausedAt?: string;
+  totalPausedSeconds?: number;
+  pauseCount?: number;
+  endedAt?: string;
+  publicEvidence?: SoloMapEvidence[];
+  xenoVetoes?: number;
+  randomizations?: number;
   movementHistory?: Array<{
     at: string;
     reason: 'initial' | 'move' | 'distant-cuisine';

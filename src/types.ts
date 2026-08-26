@@ -39,6 +39,15 @@ export interface Constraint {
 export type Area = Feature<Polygon | MultiPolygon>;
 export type AreaDisplayMode = 'allowed-green' | 'excluded-red';
 export type TransitScope = 'all' | 'primary';
+export type ManualReachRegion = {
+  id: string;
+  points: Position[];
+};
+export type ManualReachBoundary = {
+  enabled: boolean;
+  visible: boolean;
+  regions: ManualReachRegion[];
+};
 export interface SharedState {
   version: 2;
   constraints: Constraint[];
@@ -53,4 +62,5 @@ export interface SharedState {
   stationStatuses: Record<string, Eligibility>;
   routeStatuses: Record<string, Eligibility>;
   endGameActive?: boolean;
+  manualReachBoundary?: ManualReachBoundary;
 }

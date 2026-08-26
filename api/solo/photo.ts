@@ -9,6 +9,10 @@ export default async function handler(request: Request) {
     const token = new URL(request.url).searchParams.get('token');
     if (!token) return jsonError('Photo token is missing.');
     const asset = await unseal<PhotoAsset>(token, 'solo-photo');
+    if (!asset.panoramaId || asset.panoramaId.length > 300 || !Number.isFinite(asset.heading) ||
+      !Number.isFinite(asset.pitch) || !Number.isFinite(asset.fov) || asset.fov < 10 || asset.fov > 120) {
+      return jsonError('The Solo photo request is invalid.');
+    }
     const key = process.env.GOOGLE_MAPS_SERVER_API_KEY;
     if (!key) throw new Error('GOOGLE_MAPS_SERVER_API_KEY is not configured.');
     const url = new URL('https://maps.googleapis.com/maps/api/streetview');
@@ -29,6 +33,7 @@ export default async function handler(request: Request) {
       },
     });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : 'The Solo photo is unavailable.', 400);
+    console.warn('[Solo photo endpoint unavailable]', error instanceof Error ? error.name : 'unknown');
+    return jsonError('The Solo photo is temporarily unavailable.', 400);
   }
 }

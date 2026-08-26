@@ -9,6 +9,7 @@ import { canonicalQuestionKey, cardsForQuestion, distanceMeters, keptCardsForQue
 import type { Constraint, Position, QuestionKind } from '../../src/types';
 import { panoramaAt, photoTargetInZone } from '../_solo-google';
 import { jsonError, readJson, seal, unseal, type PhotoAsset, type SecretSoloSession, type StreetOrientationAsset } from '../_solo-session';
+import { requireRunningSession, SoloPausedError } from '../_solo-clock';
 import { cardIdFromInstance } from '../../src/cards';
 import { chooseCardStrategy, chooseResponseStrategy, groundedPlace, type GeminiFallbackReason } from '../_solo-gemini';
 import { addDecision, advancePersistentEffects, effectiveCardIdForPlay, enforceSoloHandLimit, fallbackPlay, legalPostAnswerCards, legalResponseCards, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardNames, publicCardState, questionIsBlocked, spottyMemoryCategoryLabel } from '../_solo-cards';
@@ -81,6 +82,7 @@ export default async function handler(request: Request) {
     const body = await readJson<QuestionBody>(request);
     if (!body.token || !validateConstraint(body.constraint)) return jsonError('The Solo question is incomplete or invalid.');
     const session = await unseal<SecretSoloSession>(body.token, 'solo-session');
+    requireRunningSession(session);
     if (session.phase === 'found' || session.phase === 'gave-up') return jsonError('This Solo game has already ended.', 409);
     let constraint = body.constraint!;
     let key = canonicalQuestionKey(constraint);
@@ -109,6 +111,7 @@ export default async function handler(request: Request) {
       const responseUsesDuplicate = responseChoice.card && cardIdFromInstance(responseChoice.card) === 'duplicate';
       const vetoAnnouncement = `Xeno played Veto question${responseUsesDuplicate ? ' using Duplicate another card' : ''}.`;
       if (responseChoice.action === 'veto' && responseChoice.card && playResponseCard(session, responseChoice.card, 'veto', vetoAnnouncement)) {
+        session.xenoVetoes = (session.xenoVetoes ?? 0) + 1;
         session.questionUses[key] = (session.questionUses[key] ?? 0) + 1;
         session.recentQuestions = [...(session.recentQuestions ?? []), { name: constraint.name, answer: 'vetoed', kind: constraint.kind }].slice(-6);
         advancePersistentEffects(session);
@@ -127,6 +130,7 @@ export default async function handler(request: Request) {
           ? `Xeno played Randomize question${responseUsesDuplicate ? ' using Duplicate another card' : ''}: “${constraint.name}” was replaced with “${replacement.name}”.`
           : undefined;
         if (replacement && playResponseCard(session, responseChoice.card, 'randomize', announcement)) {
+          session.randomizations = (session.randomizations ?? 0) + 1;
           announcements.push(announcement!);
           randomizedFrom = constraint.name;
           randomizedTo = replacement.name;
@@ -151,6 +155,7 @@ export default async function handler(request: Request) {
     let rewardEligible = true;
 
     if (constraint.kind === 'photo-reference') {
+      try {
       const targetedPhoto = await photoTargetInZone(
         constraint.category, session.station.position, session.wideHeading, session.stationZoneMiles,
       );
@@ -216,6 +221,12 @@ export default async function handler(request: Request) {
         displayText = plan.displayText;
       } else if (!plan.staticAssetUrl && !plan.generatedAsset && !plan.unavailableReason) {
         displayText = `I cannot answer: outdoor Street View is unavailable at the ${plan.source === 'station' ? 'central station' : 'hiding location'}`;
+        rewardEligible = false;
+      }
+      } catch (error) {
+        console.warn('[Solo photo unavailable]', error instanceof Error ? error.name : 'unknown');
+        displayText = 'I cannot answer: the photo service is temporarily unavailable';
+        photoUrl = undefined;
         rewardEligible = false;
       }
       answer = 'yes';
@@ -303,6 +314,17 @@ export default async function handler(request: Request) {
             effect.proposedPosition = safePlace.position;
             effect.proposedPanorama = distantPanorama ? { id: distantPanorama.id, date: distantPanorama.date } : undefined;
             effect.citationUrl = safePlace.citationUrl;
+            if (playedId === 'mediocre-travel-agent' && session.lastSeekerPosition) {
+              session.publicEvidence = [...(session.publicEvidence ?? []), {
+                id: effect.id,
+                kind: 'closer-to',
+                label: `${effect.name}: the destination is farther from Xeno than the seekers were`,
+                nearer: session.lastSeekerPosition,
+                farther: safePlace.position,
+                placeName: safePlace.name,
+                positionRevision: session.positionRevision ?? 0,
+              }];
+            }
             effect.detail = playedId === 'distant-cuisine'
               ? `Hider restaurant: ${safePlace.name}. Cuisine country: ${safePlace.country}. Seekers need a restaurant whose country is at least as far from San Francisco.`
               : `Vacation destination: ${safePlace.name}. Stay at least five minutes, send three photos, and obtain a souvenir.`;
@@ -361,6 +383,6 @@ export default async function handler(request: Request) {
       cardState,
     }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : 'Xeno could not answer that question.', 400);
+    return jsonError(error instanceof Error ? error.message : 'Xeno could not answer that question.', error instanceof SoloPausedError ? 409 : 400);
   }
 }
