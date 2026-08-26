@@ -11,7 +11,7 @@ import { districtAt, elevationAt, landmassAt, nearestStreet, nearestStreetOrient
 import { pathDistanceMiles, pathGeoJson } from './trace';
 import { decodeState, encodeState, validateState } from './share';
 import { allowedHidingArea, bufferedNoHideZones, isHidingPositionAllowed, noHideZoneProvenance } from './noHideZones';
-import { eligibleStationIds, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, routesForStation, shouldDisplayStationZone, stationIdsMatchingTransitQuestions, stationRouteProvenance, transitRouteLabel, transitRoutes, validStations } from './transit';
+import { eligibleStationIds, filterStationsBySearch, otherTransitRoutes, primaryTransitRoutes, primaryTransitStationIds, routesForStation, shouldDisplayStationZone, stationIdsMatchingTransitQuestions, stationRouteProvenance, transitRouteLabel, transitRoutes, validStations } from './transit';
 import type { Constraint, SharedState } from './types';
 
 const base = (kind: Constraint['kind']): Constraint => ({
@@ -39,6 +39,24 @@ describe('SF normalization', () => {
     expect(pois.filter((poi) => poi.category === 'museum')).toHaveLength(49);
     expect(pois.filter((poi) => poi.category === 'library')).toHaveLength(29);
     expect(validStations).toHaveLength(193);
+  });
+
+  it('filters stations by every search term while preserving source order', () => {
+    expect(filterStationsBySearch(validStations, '')).toBe(validStations);
+    expect(filterStationsBySearch(validStations, 'mission').map((station) => station.name)).toEqual([
+      '16th St Mission',
+      '24th St Mission',
+      '3rd St & Mission Rock St',
+      'Mission St & 20th St',
+      'Mission St & Murray St',
+      'Mission St & Silver Ave',
+      'Geneva Ave & Mission St',
+      'Mission St & Lowell St',
+    ]);
+    expect(filterStationsBySearch(validStations, 'mission 24').map((station) => station.name)).toEqual([
+      '24th St Mission',
+    ]);
+    expect(filterStationsBySearch(validStations, 'not a station')).toEqual([]);
   });
 });
 

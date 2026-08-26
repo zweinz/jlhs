@@ -3,7 +3,7 @@ import type { Feature, FeatureCollection, LineString, MultiLineString } from 'ge
 import coastlineRaw from './data/coastline.json';
 import stationRoutesRaw from './data/station-routes.json';
 import routesRaw from './data/transit-routes.json';
-import { pois } from './data';
+import { pois, type Poi } from './data';
 import type { Constraint, Eligibility, Position } from './types';
 
 export type TransitRoute = {
@@ -48,6 +48,15 @@ export const stationRouteProvenance = stationRouteData.provenance;
 export const coastline = (coastlineRaw as FeatureCollection<MultiLineString>).features[0];
 export const coastlineProvenance = (coastlineRaw as unknown as { provenance: Record<string, string> }).provenance;
 export const validStations = pois.filter((poi) => poi.category === 'game-valid-station');
+
+export function filterStationsBySearch(stations: Poi[], search: string) {
+  const terms = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return stations;
+  return stations.filter((station) => {
+    const name = station.name.toLocaleLowerCase();
+    return terms.every((term) => name.includes(term));
+  });
+}
 
 const knownRouteIds = new Set(transitRoutes.map((route) => route.id));
 const stationRoutes = new Map(validStations.map((station) => [

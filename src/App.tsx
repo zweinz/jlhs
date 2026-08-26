@@ -70,6 +70,7 @@ import {
   coastlineProvenance,
   distanceToRoute,
   eligibleStationIds,
+  filterStationsBySearch,
   primaryTransitRoutes,
   primaryTransitStationIds,
   routesForStation,
@@ -415,6 +416,7 @@ export default function App() {
   const [currentLocation, setCurrentLocation] = useState<Position | undefined>();
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [message, setMessage] = useState('');
+  const [stationSearch, setStationSearch] = useState('');
   const [selectedStation, setSelectedStation] = useState(validStations[0]?.id ?? '');
   const [traceActive, setTraceActive] = useState(false);
   const [traceScreenshot, setTraceScreenshot] = useState(false);
@@ -447,6 +449,10 @@ export default function App() {
   const scopedStations = useMemo(
     () => validStations.filter((station) => scopedStationIds.has(station.id)),
     [scopedStationIds],
+  );
+  const filteredStations = useMemo(
+    () => filterStationsBySearch(scopedStations, stationSearch),
+    [scopedStations, stationSearch],
   );
   const allRouteEligibility = scopedRoutes.every((route) => state.routeStatuses[route.id] === 'in')
     ? 'in'
@@ -551,10 +557,10 @@ export default function App() {
   useEffect(() => () => longPress.dispose(), [longPress]);
 
   useEffect(() => {
-    if (!scopedStations.some((station) => station.id === selectedStation)) {
-      setSelectedStation(scopedStations[0]?.id ?? '');
+    if (!filteredStations.some((station) => station.id === selectedStation)) {
+      setSelectedStation(filteredStations[0]?.id ?? '');
     }
-  }, [scopedStations, selectedStation]);
+  }, [filteredStations, selectedStation]);
 
   useEffect(() => {
     if (!currentLocationVisible) return;
@@ -1631,12 +1637,14 @@ export default function App() {
               <button type="button" className="secondary" onClick={() => setAllStationEligibility('')}>Clear all</button>
             </div>
             <h3>One station</h3>
-            <label className="stacked">Station<select value={selectedStation} onChange={(event) => setSelectedStation(event.target.value)}>{scopedStations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
+            <label className="stacked">Search stations<input type="search" value={stationSearch} onChange={(event) => setStationSearch(event.target.value)} placeholder="Type part of a station name" /></label>
+            <p className="helper">{filteredStations.length} of {scopedStations.length} stations shown.</p>
+            <label className="stacked">Station<select value={selectedStation} disabled={filteredStations.length === 0} onChange={(event) => setSelectedStation(event.target.value)}>{filteredStations.length === 0 && <option value="">No matching stations</option>}{filteredStations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}</select></label>
             {selectedStation && <p className="helper">Services stopping here: {routesForStation(selectedStation).filter((routeId) => scopedRouteIds.has(routeId)).join(', ') || 'no mapped transit service'}</p>}
             <div className="three-buttons">
-              <button type="button" className="keep" onClick={() => setEligibility('station', selectedStation, 'in')}>Keep in</button>
-              <button type="button" className="danger" onClick={() => setEligibility('station', selectedStation, 'out')}>Cut out</button>
-              <button type="button" className="secondary" onClick={() => setEligibility('station', selectedStation, '')}>Clear</button>
+              <button type="button" className="keep" disabled={!selectedStation} onClick={() => setEligibility('station', selectedStation, 'in')}>Keep in</button>
+              <button type="button" className="danger" disabled={!selectedStation} onClick={() => setEligibility('station', selectedStation, 'out')}>Cut out</button>
+              <button type="button" className="secondary" disabled={!selectedStation} onClick={() => setEligibility('station', selectedStation, '')}>Clear</button>
             </div>
             <h3>Cut or keep an entire route</h3>
             <label className="stacked">All transit routes<select aria-label="All route eligibility" value={allRouteEligibility} onChange={(event) => setAllRouteEligibility(event.target.value as Eligibility | '')}><option value="">Unmarked all</option><option value="in">Keep all in</option><option value="out">Cut all out</option>{allRouteEligibility === 'mixed' && <option value="mixed" disabled>Mixed per-route settings</option>}</select></label>
