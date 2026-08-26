@@ -107,7 +107,7 @@ export default async function handler(request: Request) {
       geminiFallbackReason = responseChoice.fallbackReason;
       if (responseChoice.fallbackDetail) geminiFallbackDetails.push(responseChoice.fallbackDetail);
       const responseUsesDuplicate = responseChoice.card && cardIdFromInstance(responseChoice.card) === 'duplicate';
-      const vetoAnnouncement = `AI played Veto question${responseUsesDuplicate ? ' using Duplicate another card' : ''}.`;
+      const vetoAnnouncement = `Xeno played Veto question${responseUsesDuplicate ? ' using Duplicate another card' : ''}.`;
       if (responseChoice.action === 'veto' && responseChoice.card && playResponseCard(session, responseChoice.card, 'veto', vetoAnnouncement)) {
         session.questionUses[key] = (session.questionUses[key] ?? 0) + 1;
         session.recentQuestions = [...(session.recentQuestions ?? []), { name: constraint.name, answer: 'vetoed', kind: constraint.kind }].slice(-6);
@@ -124,7 +124,7 @@ export default async function handler(request: Request) {
       if (responseChoice.action === 'randomize' && responseChoice.card && replacements.length) {
         const replacement = replacements[crypto.getRandomValues(new Uint32Array(1))[0] % replacements.length];
         const announcement = replacement
-          ? `AI played Randomize question${responseUsesDuplicate ? ' using Duplicate another card' : ''}: “${constraint.name}” was replaced with “${replacement.name}”.`
+          ? `Xeno played Randomize question${responseUsesDuplicate ? ' using Duplicate another card' : ''}: “${constraint.name}” was replaced with “${replacement.name}”.`
           : undefined;
         if (replacement && playResponseCard(session, responseChoice.card, 'randomize', announcement)) {
           announcements.push(announcement!);
@@ -361,6 +361,6 @@ export default async function handler(request: Request) {
       cardState,
     }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : 'The AI could not answer that question.', 400);
+    return jsonError(error instanceof Error ? error.message : 'Xeno could not answer that question.', 400);
   }
 }

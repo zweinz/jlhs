@@ -24,7 +24,7 @@ export default async function handler(request: Request) {
       session.phase = 'found';
       const cardState = publicCardState(session);
       return Response.json({
-        token: await seal(session), phase: session.phase, message: 'You found the AI hider.',
+        token: await seal(session), phase: session.phase, message: 'You found Xeno.',
         reveal: await revealPayload(session, 'found'),
         cardState,
       }, { headers: { 'cache-control': 'no-store' } });

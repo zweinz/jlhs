@@ -269,7 +269,7 @@ export function playResponseCard(session: SecretSoloSession, instance: CardInsta
   if (!legalResponseCards(session).includes(instance) || !responseCardCanActAs(session, instance, action)) return false;
   const duplicateNote = cardIdFromInstance(instance) === 'duplicate' ? `Duplicate another card as ${CARD_CATALOG[action].name}` : CARD_CATALOG[action].name;
   consume(session.deck, instance);
-  addDecision(session, announcement ?? `AI played ${duplicateNote}.`);
+  addDecision(session, announcement ?? `Xeno played ${duplicateNote}.`);
   return true;
 }
 
@@ -351,7 +351,24 @@ export function deterministicMazeSvg(seedText: string) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size * cell} ${size * cell}" role="img" aria-label="Solvable maze"><rect width="100%" height="100%" fill="white"/><g fill="none" stroke="#17222d" stroke-width="2">${lines.join('')}</g><text x="4" y="15" font-size="10">START</text><text x="${size * cell - 34}" y="${size * cell - 5}" font-size="10">END</text></svg>`;
 }
 
-function createCurseEffect(session: SecretSoloSession, instance: CardInstanceId, card: CardDefinition): SoloEffectState {
+function randomizedSoloCurseDetail(cardId: CardId, random: () => number) {
+  const choose = <T,>(options: T[]) => options[Math.min(options.length - 1, Math.max(0, Math.floor(random() * options.length)))];
+  if (cardId === 'luxury-car') {
+    const threshold = choose([30_000, 35_000, 40_000, 45_000]);
+    return `Solo challenge: photograph a car whose typical original US MSRP is at least $${threshold.toLocaleString('en-US')}.`;
+  }
+  if (cardId === 'bird-guide') {
+    const seconds = choose([5, 10, 15]);
+    return `Solo challenge: continuously film one wild bird for at least ${seconds} seconds.`;
+  }
+  if (cardId === 'zoologist') {
+    const category = choose(['bird', 'mammal', 'bug']);
+    return `Solo challenge: photograph a wild ${category}.`;
+  }
+  return undefined;
+}
+
+function createCurseEffect(session: SecretSoloSession, instance: CardInstanceId, card: CardDefinition, random: () => number): SoloEffectState {
   const durationMinutes = card.smallDurationMinutes;
   return {
     id: crypto.randomUUID(),
@@ -367,6 +384,7 @@ function createCurseEffect(session: SecretSoloSession, instance: CardInstanceId,
     castingInstruction: card.castingInstruction,
     completionInstruction: card.completionInstruction,
     failureInstruction: card.failureInstruction,
+    detail: randomizedSoloCurseDetail(card.id, random),
     mazeSvg: card.id === 'labyrinth' ? deterministicMazeSvg(`${session.sessionId}:${session.questionNumber}`) : undefined,
     hangmanWord: card.id === 'hidden-hangman' ? hangmanWord(session) : undefined,
     hangmanWrong: card.id === 'hidden-hangman' ? [] : undefined,
@@ -416,7 +434,7 @@ export async function playMoveCard(
     position: session.spot, previousStationName: oldStation.name,
   }];
   const discardedNames = publicCardNames(discarded).join(', ') || 'nothing';
-  const announcement = `AI played ${copied ? 'Duplicate another card as ' : ''}Move. Old station revealed: ${oldStation.name}. The AI relocated immediately; seekers may continue playing.`;
+  const announcement = `Xeno played ${copied ? 'Duplicate another card as ' : ''}Move. Old station revealed: ${oldStation.name}. Xeno relocated immediately; seekers may continue playing.`;
   addDecision(session, `${announcement} Discarded ${discardedNames}.`);
   return { played: true, announcement };
 }
@@ -451,7 +469,7 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
       detail = ` Discarded ${publicCardNames(discarded).join(', ') || 'nothing'} and drew ${publicCardNames(drawn).join(', ') || 'nothing'}.`;
       if (overflow.length) detail += ` Discarded ${publicCardNames(overflow).join(', ')} for hand overflow.`;
     }
-    const announcement = `AI played ${copiedNote}.`;
+    const announcement = `Xeno played ${copiedNote}.`;
     addDecision(session, `${announcement}${detail}${castingNote}`);
     return { played: true, announcement };
   }
@@ -462,7 +480,7 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
     castingRoll = 1 + Math.floor(random() * 6);
     const misses = card.id === 'endless-tumble' ? castingRoll >= 5 : castingRoll % 2 === 0;
     if (misses) {
-      const announcement = `AI attempted ${copiedNote}, rolled ${castingRoll}, and the curse had no effect.`;
+      const announcement = `Xeno attempted ${copiedNote}, rolled ${castingRoll}, and the curse had no effect.`;
       addDecision(session, `${announcement}${castingNote}`);
       return { played: true, announcement, noEffect: true };
     }
@@ -476,7 +494,7 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
   if (card.id === 'overflowing-chalice') session.overflowingQuestionsRemaining = 3;
   if (card.id === 'impressionable-consumer') session.freeNextQuestion = true;
   if (card.id === 'spotty-memory') session.spottyMemoryCategory = rollSpottyMemoryCategory();
-  const effect = createCurseEffect(session, instance, card);
+  const effect = createCurseEffect(session, instance, card, random);
   if (castingRoll !== undefined) effect.detail = `Hider casting roll: ${castingRoll}. The curse took effect.`;
   if (card.id === 'drained-brain') effect.detail = `Disabled questions: ${(session.blockedQuestionKeys ?? []).map(formatQuestionKey).join('; ')}.`;
   session.activeEffects = [...(session.activeEffects ?? []), effect];
@@ -484,8 +502,8 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
     ? ` ${spottyMemoryCategoryLabel(session.spottyMemoryCategory)} questions are disabled until the next completed question.`
     : '';
   const announcement = effect.status === 'pending'
-    ? `AI attempted ${copiedNote}. Casting condition: ${card.castingInstruction ?? 'confirm the printed condition'}.`
-    : `AI played ${copiedNote}.${spottyMemoryNote}${effect.detail ? ` ${effect.detail}` : ''}`;
+    ? `Xeno attempted ${copiedNote}. Casting condition: ${card.castingInstruction ?? 'confirm the printed condition'}.`
+    : `Xeno played ${copiedNote}.${spottyMemoryNote}${effect.detail ? ` ${effect.detail}` : ''}`;
   addDecision(session, `${announcement}${castingNote}`);
   return { played: true, announcement, pending: effect.status === 'pending' };
 }

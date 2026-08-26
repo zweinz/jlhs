@@ -191,7 +191,7 @@ describe('Solo camera and time rules', () => {
     expect(stationFeature.geometry.coordinates).toEqual([station.lng, station.lat]);
     expect(stationFeature.properties).toMatchObject({ kind: 'solo-reveal-station', areaName: 'Central station: Central' });
     expect(spotFeature.geometry.coordinates).toEqual([spot.lng, spot.lat]);
-    expect(spotFeature.properties).toMatchObject({ kind: 'solo-reveal', areaName: 'AI hiding spot' });
+    expect(spotFeature.properties).toMatchObject({ kind: 'solo-reveal', areaName: 'Xeno hiding spot' });
   });
 });
 
@@ -770,7 +770,7 @@ describe('Solo token and card-session security', () => {
       expect(body.replacementConstraint.distanceMiles).not.toBe(original.distanceMiles);
       expect(body.randomizedFrom).toBe(original.name);
       expect(body.randomizedTo).toBe(body.replacementConstraint.name);
-      expect(body.playedCardAnnouncements).toContain(`AI played Randomize question: “${original.name}” was replaced with “${body.replacementConstraint.name}”.`);
+      expect(body.playedCardAnnouncements).toContain(`Xeno played Randomize question: “${original.name}” was replaced with “${body.replacementConstraint.name}”.`);
       expect(body.cardState.playHistory.join(' ')).toMatch(/played Randomize question.*was replaced with/i);
     } finally {
       vi.unstubAllGlobals();
@@ -812,7 +812,7 @@ describe('Solo token and card-session security', () => {
         outcome: 'vetoed', displayText: 'Question vetoed — no answer or card reward.', cardsDrawn: 0, cardsKept: 0,
       }));
       expect(body.answer).toBeUndefined();
-      expect(body.playedCardAnnouncements).toEqual(['AI played Veto question.']);
+      expect(body.playedCardAnnouncements).toEqual(['Xeno played Veto question.']);
       expect(body.questionUses).toEqual({ 'radar:1.000': 1 });
       const sealed = await unseal<SecretSoloSession>(body.token, 'solo-session');
       expect(sealed.questionUses[canonicalQuestionKey(constraint)]).toBe(1);

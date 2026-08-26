@@ -21,7 +21,7 @@ function sessionWithHand(hand: CardInstanceId[], questionNumber = 1): SecretSolo
   };
 }
 
-describe('official AI hider deck', () => {
+describe('official Xeno hider deck', () => {
   it('contains exactly 55 time bonuses, 21 powerups, and 24 curses', () => {
     const cards = Object.values(CARD_CATALOG);
     expect(deckCatalogCount()).toBe(100);
@@ -37,8 +37,8 @@ describe('official AI hider deck', () => {
     })).toEqual([[2, 25], [4, 15], [6, 10], [8, 3], [12, 2]]);
   });
 
-  it('keeps exactly the five physical-only curses unplayable and in the shuffled deck', () => {
-    expect([...UNPLAYABLE_AI_CURSES].sort()).toEqual(['bird-guide', 'cairn', 'luxury-car', 'ransom-note', 'zoologist']);
+  it('keeps only Cairn and Ransom Note unplayable and in the shuffled deck', () => {
+    expect([...UNPLAYABLE_AI_CURSES].sort()).toEqual(['cairn', 'ransom-note']);
     const deck = createDeck(() => 0.5);
     expect(deck.drawPile).toHaveLength(100);
     expect(new Set(deck.drawPile)).toHaveLength(100);
@@ -104,14 +104,32 @@ describe('official AI hider deck', () => {
     session.deck!.drawPile = ['time-4#1', 'veto#1'];
     const result = playPostAnswerCard(session, 'discard-1-draw-2#1');
     expect(result.played).toBe(true);
-    expect(result.announcement).toBe('AI played Discard 1, draw 2.');
+    expect(result.announcement).toBe('Xeno played Discard 1, draw 2.');
     expect(result.announcement).not.toMatch(/discarded|drew/i);
     expect(session.recentDecisions?.at(-1)).toMatch(/Discard 1, draw 2.*discarded 2-minute time bonus.*drew 4-minute time bonus, Veto question/i);
   });
 
-  it('does not expose physical-only curses as legal plays', () => {
-    const session = sessionWithHand(['cairn#1', 'luxury-car#1', 'ransom-note#1', 'bird-guide#1', 'zoologist#1']);
+  it('does not expose the remaining physical-only curses as legal plays', () => {
+    const session = sessionWithHand(['cairn#1', 'ransom-note#1']);
     expect(legalPostAnswerCards(session)).toEqual([]);
+  });
+
+  it('creates easy randomized Solo challenges for Luxury Car, Bird Guide, and Zoologist', () => {
+    const cases = [
+      ['luxury-car#1', 0, /at least \$30,000/],
+      ['bird-guide#1', 0.5, /at least 10 seconds/],
+      ['zoologist#1', 0.999, /wild bug/],
+    ] as const;
+    for (const [instance, roll, expected] of cases) {
+      const session = sessionWithHand([instance]);
+      expect(legalPostAnswerCards(session)).toContain(instance);
+      const result = playPostAnswerCard(session, instance, () => roll);
+      expect(result.played).toBe(true);
+      expect(result.announcement).toMatch(expected);
+      expect(publicCardState(session).activeCurses[0]).toEqual(expect.objectContaining({
+        status: 'active', canClear: true, detail: expect.stringMatching(expected),
+      }));
+    }
   });
 
   it('enforces Question 1 to Question 3 curse cadence, including failed attempts', () => {
@@ -150,9 +168,10 @@ describe('official AI hider deck', () => {
       'egg-partner': 'task-then-persistent', 'endless-tumble': 'manual-clear', 'gamblers-feet': 'timed',
       'hidden-hangman': 'hangman', 'impressionable-consumer': 'manual-clear', 'jammed-door': 'timed',
       labyrinth: 'manual-clear', 'lemon-phylactery': 'task-then-persistent',
-      'mediocre-travel-agent': 'task-then-persistent', 'overflowing-chalice': 'question-counter',
+      'luxury-car': 'manual-clear', 'mediocre-travel-agent': 'task-then-persistent', 'overflowing-chalice': 'question-counter',
       'right-turn': 'timed', 'spotty-memory': 'persistent', 'unguided-tourist': 'manual-clear',
-      'u-turn': 'manual-clear', 'urban-explorer': 'persistent', 'water-weight': 'task-then-persistent',
+      'bird-guide': 'manual-clear', 'u-turn': 'manual-clear', 'urban-explorer': 'persistent',
+      'water-weight': 'task-then-persistent', zoologist: 'manual-clear',
     } as const;
     expect(Object.fromEntries(Object.keys(expected).map((id) => [id, CARD_CATALOG[id as keyof typeof CARD_CATALOG].resolution]))).toEqual(expected);
     expect(CARD_CATALOG['gamblers-feet'].smallDurationMinutes).toBe(20);

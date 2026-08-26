@@ -26,7 +26,7 @@ export type AnySoloPhotoKind = SoloPhotoKind;
 export const SOLO_PHOTO_SUBJECTS: Array<{ id: SoloPhotoKind; label: string; help: string }> = [
   { id: 'a-tree', label: 'A tree', help: 'Best effort: aims outdoor Street View into a mapped park in the hiding zone when possible, otherwise uses the hiding panorama.' },
   { id: 'the-sky', label: 'The sky', help: 'Supported: a deterministic view aimed straight up at the hiding location.' },
-  { id: 'you', label: 'You', help: 'Easter egg: the AI supplies its own suspiciously anonymous selfie. Free to ask; no cards are drawn or kept.' },
+  { id: 'you', label: 'You', help: 'Easter egg: Xeno supplies a suspiciously anonymous selfie. Free to ask; no cards are drawn or kept.' },
   { id: 'widest-street', label: 'Widest street', help: 'Approximate: a wide deterministic streetscape at the hiding location; Street View cannot prove it is the zone’s widest.' },
   { id: 'tallest-structure-in-your-sightline', label: 'Tallest structure in your sightline', help: 'Approximate: an upward-framed deterministic view at the hiding location.' },
   { id: 'any-building-visible-from-station', label: 'Any building visible from station', help: 'Rulebook-card approximation from the station panorama, framed upward to include a nearby building.' },
@@ -313,7 +313,7 @@ export function soloPhotoPlan(
   }
   if (kind === 'you') return {
     source: 'spot',
-    displayText: 'You · AI hider selfie (identity successfully concealed)',
+    displayText: 'You · Xeno selfie (identity successfully concealed)',
     heading: normalizedHeading(seededHeading),
     pitch: 0,
     fov: 90,
@@ -383,6 +383,6 @@ export function soloRevealMapFeatures(reveal: Pick<SoloReveal, 'station' | 'spot
       [reveal.station.position.lng, reveal.station.position.lat],
       { kind: 'solo-reveal-station', areaName: `Central station: ${reveal.station.name}` },
     ),
-    turf.point([reveal.spot.lng, reveal.spot.lat], { kind: 'solo-reveal', areaName: 'AI hiding spot' }),
+    turf.point([reveal.spot.lng, reveal.spot.lat], { kind: 'solo-reveal', areaName: 'Xeno hiding spot' }),
   ];
 }

@@ -399,6 +399,9 @@ export default function App() {
   const placeInfoWindowRef = useRef<google.maps.InfoWindow | null>(null);
   const radarPreviewRef = useRef<{ constraintId: string; circle: google.maps.Circle } | null>(null);
   const drawn = useRef<google.maps.Data | null>(null);
+  const currentLocationLayerRef = useRef<google.maps.Data | null>(null);
+  const currentLocationFeatureRef = useRef<google.maps.Data.Feature | null>(null);
+  const currentLocationCenteredRef = useRef(false);
   const [state, setState] = useState<SharedState>(() => initialSolo?.boardState ?? restoredState());
   const [solo, setSolo] = useState<SoloClientSession | undefined>(initialSolo);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -563,7 +566,11 @@ export default function App() {
   }, [filteredStations, selectedStation]);
 
   useEffect(() => {
-    if (!currentLocationVisible) return;
+    if (!currentLocationVisible) {
+      setCurrentLocation(undefined);
+      currentLocationCenteredRef.current = false;
+      return;
+    }
     if (!navigator.geolocation) {
       setMessage('Current location is unavailable in this browser.');
       setCurrentLocationVisible(false);
@@ -578,7 +585,6 @@ export default function App() {
           return;
         }
         setCurrentLocation(position);
-        mapRef.current?.panTo(position);
       },
       () => {
         setMessage('Current location was not available. Check the browser location permission and try again.');
@@ -744,6 +750,52 @@ export default function App() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || status !== 'ready') return;
+    if (!currentLocationVisible || !currentLocation) {
+      currentLocationLayerRef.current?.setMap(null);
+      currentLocationLayerRef.current = null;
+      currentLocationFeatureRef.current = null;
+      return;
+    }
+
+    let data = currentLocationLayerRef.current;
+    if (!data) {
+      data = new google.maps.Data({ map });
+      data.setStyle({
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          fillColor: '#0ea5e9',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 3,
+          scale: 7,
+        },
+        zIndex: 40,
+      });
+      currentLocationLayerRef.current = data;
+    }
+
+    const geometry = new google.maps.Data.Point(currentLocation);
+    if (currentLocationFeatureRef.current) {
+      currentLocationFeatureRef.current.setGeometry(geometry);
+    } else {
+      currentLocationFeatureRef.current = data.add({ geometry });
+    }
+
+    if (!currentLocationCenteredRef.current) {
+      map.panTo(currentLocation);
+      currentLocationCenteredRef.current = true;
+    }
+  }, [currentLocation, currentLocationVisible, status]);
+
+  useEffect(() => () => {
+    currentLocationLayerRef.current?.setMap(null);
+    currentLocationLayerRef.current = null;
+    currentLocationFeatureRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || status !== 'ready') return;
     drawn.current?.setMap(null);
     const data = new google.maps.Data({ map });
     drawn.current = data;
@@ -813,13 +865,6 @@ export default function App() {
         });
       }
     });
-    if (currentLocationVisible && currentLocation) {
-      data.addGeoJson({
-        type: 'Feature',
-        properties: { kind: 'current-location' },
-        geometry: { type: 'Point', coordinates: [currentLocation.lng, currentLocation.lat] },
-      });
-    }
     if (droppedPin) {
       data.addGeoJson({
         type: 'Feature',
@@ -868,19 +913,6 @@ export default function App() {
       if (kind === 'trace-point') {
         const endpoint = feature.getProperty('endpoint');
         return { icon: { path: google.maps.SymbolPath.CIRCLE, fillColor: endpoint ? '#e11d48' : '#ffffff', fillOpacity: 1, strokeColor: '#e11d48', strokeWeight: 2, scale: endpoint ? 5 : 3 }, zIndex: 21 };
-      }
-      if (kind === 'current-location') {
-        return {
-          icon: {
-            path: google.maps.SymbolPath.CIRCLE,
-            fillColor: '#0ea5e9',
-            fillOpacity: 1,
-            strokeColor: '#ffffff',
-            strokeWeight: 3,
-            scale: 7,
-          },
-          zIndex: 40,
-        };
       }
       if (kind === 'solo-reveal') {
         const star = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><path d="M24 2l5.3 14.7 15.7.5-12.4 9.6L37 42l-13-9-13 9 4.4-15.2L3 17.2l15.7-.5L24 2Z" fill="#facc15" stroke="white" stroke-width="6" stroke-linejoin="round"/><path d="M24 2l5.3 14.7 15.7.5-12.4 9.6L37 42l-13-9-13 9 4.4-15.2L3 17.2l15.7-.5L24 2Z" fill="#facc15" stroke="#92400e" stroke-width="2" stroke-linejoin="round"/></svg>';
@@ -1002,7 +1034,7 @@ export default function App() {
     });
     data.addListener('mouseup', longPress.cancel);
     data.addListener('mouseout', longPress.cancel);
-  }, [currentLocation, currentLocationVisible, droppedPin, eligibleIds, excluded, feasible, longPress, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.cardState?.moves, solo?.reveal, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
+  }, [droppedPin, eligibleIds, excluded, feasible, longPress, partitions, scopedStations, selectedPartitionPois, selectedPoiPartition, solo?.cardState?.moves, solo?.reveal, state.areaDisplayMode, state.hiderPosition, state.layers, state.mode, state.routeStatuses, state.stationStatuses, state.stationZoneMiles, state.transitScope, status, traceActive, tracePoints, traceScreenshot]);
 
   const patchConstraint = (id: string, update: Partial<Constraint>) =>
     setState((current) => {
@@ -1185,7 +1217,7 @@ export default function App() {
         }),
       });
       const body = await response.json() as SoloStartResponse & { error?: string };
-      if (!response.ok || !body.token) throw new Error(body.error ?? 'The AI could not choose a hiding spot.');
+      if (!response.ok || !body.token) throw new Error(body.error ?? 'Xeno could not choose a hiding spot.');
       const boardState = {
         ...soloStateForNewGame({ ...state, transitScope }),
         viewport: { center: soloStartPosition, zoom: 13 },
@@ -1203,9 +1235,9 @@ export default function App() {
       setMenuOpen(false);
       mapRef.current?.panTo(soloStartPosition);
       mapRef.current?.setZoom(13);
-      setMessage(`The AI chose a reachable hiding zone using ${body.hidingTimeMinutes} minutes of hiding time and a ${body.stationZoneMiles}-mile radius. Seeking starts now.`);
+      setMessage(`Xeno chose a reachable hiding zone using ${body.hidingTimeMinutes} minutes of hiding time and a ${body.stationZoneMiles}-mile radius. Seeking starts now.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'The AI could not start a Solo game.');
+      setMessage(error instanceof Error ? error.message : 'Xeno could not start a Solo game.');
     } finally {
       setSoloBusy(false);
     }
@@ -1242,7 +1274,7 @@ export default function App() {
       body.geminiFallbackDetails?.forEach((detail) => {
         console.warn(`[Solo Gemini fallback] ${body.geminiFallbackReason ?? 'unknown'}: ${detail}`);
       });
-      if (!response.ok || !body.token || !body.displayText || (body.outcome !== 'vetoed' && !body.answer)) throw new Error(body.error ?? 'The AI could not answer.');
+      if (!response.ok || !body.token || !body.displayText || (body.outcome !== 'vetoed' && !body.answer)) throw new Error(body.error ?? 'Xeno could not answer.');
       const effectiveConstraint = body.replacementConstraint ?? constraint;
       if (body.outcome !== 'vetoed' && body.answer) patchConstraint(
         constraint.id,
@@ -1277,8 +1309,8 @@ export default function App() {
       const resultMessage = body.playedCardAnnouncements?.length ? body.playedCardAnnouncements.join(' ') : body.phase === 'end-game'
         ? 'Confirmed — the end game has begun.'
         : record.cardsDrawn === 0
-          ? 'AI answered · no cards drawn.'
-          : `AI answered · drew ${record.cardsDrawn} card${record.cardsDrawn === 1 ? '' : 's'}.`;
+          ? 'Xeno answered · no cards drawn.'
+          : `Xeno answered · drew ${record.cardsDrawn} card${record.cardsDrawn === 1 ? '' : 's'}.`;
       const fallbackMessage = body.geminiFallbackReason === 'rate-limit'
         ? 'Gemini’s per-minute limit was reached for this decision, so built-in strategy was used.'
         : body.geminiFallbackReason === 'error' || body.geminiFallbackReason === 'unavailable'
@@ -1286,7 +1318,7 @@ export default function App() {
           : '';
       setMessage([resultMessage, fallbackMessage].filter(Boolean).join(' '));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'The AI could not answer.');
+      setMessage(error instanceof Error ? error.message : 'Xeno could not answer.');
     } finally {
       setSoloBusy(false);
     }
@@ -1371,7 +1403,7 @@ export default function App() {
   };
 
   const revealSolo = async () => {
-    if (!solo || !confirm('Reveal the AI hider’s current location? The game will continue.')) return;
+    if (!solo || !confirm('Reveal Xeno’s current location? The game will continue.')) return;
     try {
       setSoloBusy(true);
       const response = await fetch('/api/solo/reveal', {
@@ -1381,7 +1413,7 @@ export default function App() {
       if (!response.ok) throw new Error(body.error ?? 'Could not reveal the Solo location.');
       await applySoloResult(body);
       setMenuOpen(false);
-      setMessage('The AI hider’s current location has been revealed. The game is still active.');
+      setMessage('Xeno’s current location has been revealed. The game is still active.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not reveal the Solo location.');
     } finally {
@@ -1390,7 +1422,7 @@ export default function App() {
   };
 
   const resignSolo = async () => {
-    if (!solo || !confirm('Resign this Solo game? This ends the game and reveals the AI hider.')) return;
+    if (!solo || !confirm('Resign this Solo game? This ends the game and reveals Xeno.')) return;
     try {
       setSoloBusy(true);
       const response = await fetch('/api/solo/reveal', {
@@ -1400,7 +1432,7 @@ export default function App() {
       if (!response.ok) throw new Error(body.error ?? 'Could not resign the Solo game.');
       await applySoloResult(body);
       setMenuOpen(false);
-      setMessage('You resigned. The AI hiding spot has been revealed.');
+      setMessage('You resigned. Xeno’s hiding spot has been revealed.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not resign the Solo game.');
     } finally {
@@ -1447,7 +1479,7 @@ export default function App() {
       <header>
         <div>
           <h1>SF Hiding Area</h1>
-          <p>{solo ? 'Solo game · human seekers vs. AI hider.' : 'Rulebook-aware mapping for seekers and hiders.'}</p>
+          <p>{solo ? 'Solo game · human seekers vs. Xeno.' : 'Rulebook-aware mapping for seekers and hiders.'}</p>
         </div>
         <div className="header-menu">
           <button className="menu-trigger" onClick={() => setMenuOpen((open) => !open)} aria-expanded={menuOpen} aria-label="Open game menu">•••</button>
@@ -1475,9 +1507,9 @@ export default function App() {
           {solo && <details className="panel solo-panel" open={soloPanelOpen} onToggle={(event) => {
             if (event.target === event.currentTarget) setSoloPanelOpen(event.currentTarget.open);
           }}>
-            <summary className="solo-panel-summary"><span>AI hider</span><small>{solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Resigned' : `${solo.cardState?.handCount ?? 0} cards · ${soloVisibleCurses.length} curses`}</small></summary>
-            <p className="helper">The AI may move through legal card effects. Physical curse compliance and completion reports are honor-system based.</p>
-            {solo.phase !== 'found' && solo.phase !== 'gave-up' && <p className="helper">When you think you’ve reached the AI, choose “Check if we found the hider.” The game compares your device’s current position with the AI’s hiding position.</p>}
+            <summary className="solo-panel-summary"><span>Xeno</span><small>{solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Resigned' : `${solo.cardState?.handCount ?? 0} cards · ${soloVisibleCurses.length} curses`}</small></summary>
+            <p className="helper">Xeno may move through legal card effects. Physical curse compliance and completion reports are honor-system based.</p>
+            {solo.phase !== 'found' && solo.phase !== 'gave-up' && <p className="helper">When you think you’ve reached Xeno, choose “Check if we found the hider.” The game compares your device’s current position with Xeno’s hiding position.</p>}
             {solo.cardState && <>
               <details className="solo-hand">
                 <summary><span>Private hand</span><b>{solo.cardState.handCount} / {solo.cardState.maxHandSize}</b></summary>
@@ -1485,7 +1517,7 @@ export default function App() {
                   <strong>{card.name}{card.count > 1 ? ` ×${card.count}` : ''}</strong>
                   <small>{card.kind === 'time-bonus' ? 'Time bonus' : card.kind === 'powerup' ? 'Power-up' : 'Curse'}</small>
                   <p>{card.description}</p>
-                </li>)}</ul> : <p className="helper">The AI’s hand is empty.</p>}
+                </li>)}</ul> : <p className="helper">Xeno’s hand is empty.</p>}
                 <div className="solo-card-history">
                   <h3>Card moves</h3>
                   {solo.cardState.playHistory.length ? <ol>{solo.cardState.playHistory.map((move, index) => <li key={`${index}-${move}`}>{move}</li>)}</ol> : <p className="helper">No card moves yet.</p>}
@@ -1506,7 +1538,7 @@ export default function App() {
               }</p>}
               <section className="solo-curses" aria-labelledby="solo-curses-title">
                 <h3 id="solo-curses-title">Curses</h3>
-                <p className="helper">When the AI plays a curse, it appears here with its casting condition, instructions, timer, and clear or failure controls.</p>
+                <p className="helper">When Xeno plays a curse, it appears here with its casting condition, instructions, timer, and clear or failure controls.</p>
                 {soloVisibleCurses.length === 0 && <p className="empty-state">No pending or active curses.</p>}
                 {soloVisibleCurses.map((effect) => {
                   const hangmanLocked = Boolean(effect.lockedUntil && Date.parse(effect.lockedUntil) > soloClock);
@@ -1536,19 +1568,19 @@ export default function App() {
             </>}
             {solo.phase !== 'found' && solo.phase !== 'gave-up' && <details>
               <summary>Can’t share your device’s location? Use a Google Maps pin</summary>
-              <p className="helper">Paste a Google Maps link for where you are. The game will compare that pin with the AI’s hiding position instead of using your device’s location.</p>
+              <p className="helper">Paste a Google Maps link for where you are. The game will compare that pin with Xeno’s hiding position instead of using your device’s location.</p>
               <MapLinkField label="Google Maps link for my current location" value={finishMapUrl} onChange={setFinishMapUrl} onResolved={(position) => void checkSoloPosition(position)} onMessage={setMessage} />
             </details>}
             {solo.reveal && <div className="solo-reveal">
-              <h3>{solo.reveal.reason === 'found' ? 'AI hider found' : solo.reveal.reason === 'peek' ? 'Current hider location' : 'Hiding spot revealed'}</h3>
-              {solo.reveal.reason === 'peek' && <><p className="helper">This is a snapshot of the AI’s current location. Revealing it does not end or pause the game.</p><button type="button" className="secondary" onClick={() => setSolo((current) => current ? { ...current, reveal: undefined } : current)}>Hide reveal</button></>}
+              <h3>{solo.reveal.reason === 'found' ? 'Xeno found' : solo.reveal.reason === 'peek' ? 'Xeno’s current location' : 'Xeno’s hiding spot revealed'}</h3>
+              {solo.reveal.reason === 'peek' && <><p className="helper">This is a snapshot of Xeno’s current location. Revealing it does not end or pause the game.</p><button type="button" className="secondary" onClick={() => setSolo((current) => current ? { ...current, reveal: undefined } : current)}>Hide reveal</button></>}
               <p className="helper"><b>Map markers:</b> ★ exact hiding spot · S central station</p>
               <p><b>Central station</b><br />{solo.reveal.station.name}</p>
               <div className="map-place-actions">
                 <a href={googleMapsLinkForPosition(solo.reveal.station.position)} target="_blank" rel="noreferrer">Open central station pin</a>
               </div>
               <p><b>Hiding location</b></p>
-              <img src={solo.reveal.panorama.imageUrl} alt="Street View at the revealed AI hiding spot" />
+              <img src={solo.reveal.panorama.imageUrl} alt="Street View at Xeno’s revealed hiding spot" />
               <div className="map-place-actions">
                 <a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open exact hiding pin</a>
                 <button type="button" className="secondary" onClick={copySoloRevealPin}>Copy hiding coordinates</button>
@@ -1691,7 +1723,7 @@ export default function App() {
               const questionNotes = solo && constraint.kind === 'photo-reference'
                 ? category === 'trace-nearest-street-path'
                   ? ['Solo house rule: a precomputed nearest-street orientation approximates the required intersection-to-intersection trace.', 'North is up. The clue covers named DataSF streets, not every park or unnamed path.', 'The image contains no street name or coordinates and uses no runtime map or model call.']
-                  : ['Solo house rule: Google Street View approximates a live hider photo.', 'Station cards use a panorama at the hiding station. Other supported cards use the AI’s current hiding panorama, which may change after Move or Distant Cuisine.', 'The server never exposes a coordinate-bearing Google request URL.', 'If imagery becomes unavailable, “I cannot answer” remains a valid answer.']
+                  : ['Solo house rule: Google Street View approximates a live hider photo.', 'Station cards use a panorama at the hiding station. Other supported cards use Xeno’s current hiding panorama, which may change after Move or Distant Cuisine.', 'The server never exposes a coordinate-bearing Google request URL.', 'If imagery becomes unavailable, “I cannot answer” remains a valid answer.']
                 : definition.notes;
               const selectedSubject = categoryChoices.find((subject) => subject.id === category);
               const selectedPriorUses = priorUsesFor(constraint);
@@ -1725,13 +1757,13 @@ export default function App() {
                   {!questionReady && <p className="draft-status">Draft disabled · add {missingFields.join(' and ')} to enable it.</p>}
                   {!askedRecord && disablingCurse && <p className="draft-status">Disabled by {disablingCurse.name}. Choose another question.</p>}
                   {state.mode === 'hider' && <div className={`answer-result ${(constraint.kind === 'endgame-confirmation' || (state.hiderPosition && questionReady)) ? '' : 'waiting'}`}><span>Hider answer</span><strong>{!questionReady ? 'Complete the draft first' : constraint.kind === 'endgame-confirmation' ? 'Record whether this pin is inside your hiding zone' : state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
-                  {askedRecord?.outcome === 'randomized' && <div className="answer-result randomized-result"><span>AI played Randomize question</span><p><s>{randomizedFrom}</s></p><strong>Replaced with: {randomizedTo}</strong></div>}
-                  {askedRecord?.outcome === 'vetoed' && <div className="answer-result vetoed-result"><span>AI played Veto question</span><p><s>{constraint.name}</s></p><strong>No answer was given.</strong><p>The question counts as asked, no cards were drawn, and it does not affect the map.</p></div>}
+                  {askedRecord?.outcome === 'randomized' && <div className="answer-result randomized-result"><span>Xeno played Randomize question</span><p><s>{randomizedFrom}</s></p><strong>Replaced with: {randomizedTo}</strong></div>}
+                  {askedRecord?.outcome === 'vetoed' && <div className="answer-result vetoed-result"><span>Xeno played Veto question</span><p><s>{constraint.name}</s></p><strong>No answer was given.</strong><p>The question counts as asked, no cards were drawn, and it does not affect the map.</p></div>}
                   {askedRecord?.playedCards?.filter((announcement) =>
-                    !(askedRecord.outcome === 'randomized' && announcement.startsWith('AI played Randomize question')) &&
-                    !(askedRecord.outcome === 'vetoed' && announcement.startsWith('AI played Veto question'))
-                  ).map((announcement) => <div className="answer-result card-action-result" key={announcement}><span>AI card action</span><strong>{announcement}</strong></div>)}
-                  {askedRecord && askedRecord.outcome !== 'vetoed' && <div className="answer-result"><span>{askedRecord.outcome === 'randomized' ? 'AI answer to replacement' : 'AI answer'} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={constraint.kind === 'photo-reference' && constraint.category === 'you' ? 'AI hider selfie easter egg' : `${constraint.name} Street View answer`} />}</div>}
+                    !(askedRecord.outcome === 'randomized' && announcement.startsWith('Xeno played Randomize question')) &&
+                    !(askedRecord.outcome === 'vetoed' && announcement.startsWith('Xeno played Veto question'))
+                  ).map((announcement) => <div className="answer-result card-action-result" key={announcement}><span>Xeno card action</span><strong>{announcement}</strong></div>)}
+                  {askedRecord && askedRecord.outcome !== 'vetoed' && <div className="answer-result"><span>{askedRecord.outcome === 'randomized' ? 'Xeno’s answer to replacement' : 'Xeno’s answer'} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={constraint.kind === 'photo-reference' && constraint.category === 'you' ? 'Xeno selfie easter egg' : `${constraint.name} Street View answer`} />}</div>}
                   <div className="control-grid">
                     {!solo && constraint.kind !== 'photo-reference' && <label>Recorded answer<select aria-label={`${constraint.name} answer`} value={constraint.answerSet === false ? '' : constraint.answer} onChange={(event) => patchConstraint(constraint.id, { answer: event.target.value as Constraint['answer'], answerSet: true })}>{constraint.kind === 'endgame-confirmation' && <option value="">Choose result</option>}{answerOptions(constraint.kind).map((answer) => <option key={answer} value={answer}>{constraint.kind === 'endgame-confirmation' ? answer === 'yes' ? 'Correct · inside zone' : 'Incorrect · outside zone' : answer === 'yes' && constraint.kind === 'tentacle' ? 'named POI' : answer}</option>)}</select></label>}
                     {prescribedDistances ? <>
@@ -1753,7 +1785,7 @@ export default function App() {
                   </div>
                   {!askedRecord && constraint.kind === 'endgame-confirmation' && <p className="question-cost">Free to ask · a correct pin starts the end game; an incorrect pin makes the hider draw 1 penalty card.</p>}
                   {!askedRecord && solo && constraint.kind === 'photo-reference' && category === 'you' && <p className="question-cost">Easter egg · free to ask, with no cards drawn or kept.</p>}
-                  {!askedRecord && solo?.cardState?.nextQuestionFree && constraint.kind !== 'endgame-confirmation' && <p className="question-cost">Next question is free because of Impressionable Consumer · the AI draws and keeps no cards.</p>}
+                  {!askedRecord && solo?.cardState?.nextQuestionFree && constraint.kind !== 'endgame-confirmation' && <p className="question-cost">Next question is free because of Impressionable Consumer · Xeno draws and keeps no cards.</p>}
                   {!askedRecord && !solo?.cardState?.nextQuestionFree && !(solo && constraint.kind === 'photo-reference' && category === 'you') && constraint.kind !== 'endgame-confirmation' && definition.baseDrawCount !== undefined && definition.baseKeepCount !== undefined && <p className="question-cost">Next reward: draw {cardsForQuestion(constraint, selectedPriorUses) + (solo?.cardState?.nextRewardExtraDraw ?? 0)}, keep {keptCardsForQuestion(constraint, selectedPriorUses)}{solo?.cardState?.nextRewardExtraDraw ? ' · Overflowing Chalice adds one draw, not one keep' : ''}.</p>}
                   {constraint.kind === 'endgame-confirmation' && !solo && questionReady && <p className="derived">Recorded result: <b>{constraint.answer === 'yes' ? 'Correct — end game active; no cards drawn' : 'Incorrect — hider draws 1 penalty card'}</b></p>}
                   {constraint.kind === 'tentacle' && <p className="derived">Reach: <b>1 mile</b> · fixed by the card</p>}
@@ -1761,7 +1793,7 @@ export default function App() {
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{constraint.originSet === false ? 'set the seeker pin' : matchingSource ?? 'set the seeker pin'}</b></p>}
                   {usesOrigin && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Starting pin' : constraint.kind === 'endgame-confirmation' ? 'Pin believed to be inside the hiding zone' : 'Seeker pin'} value={constraint.originMapUrl ?? ''} onChange={(originMapUrl) => patchConstraint(constraint.id, { originMapUrl })} onResolved={(origin) => applyConstraintPosition(constraint, { origin }, origin)} onMessage={setMessage} />}
                   {usesTarget && !askedRecord && <MapLinkField label={constraint.kind === 'thermometer' ? 'Ending pin' : 'Comparison pin'} value={constraint.targetMapUrl ?? ''} onChange={(targetMapUrl) => patchConstraint(constraint.id, { targetMapUrl })} onResolved={(target) => applyConstraintPosition(constraint, { target }, target)} onMessage={setMessage} />}
-                  {solo && !askedRecord && <button type="button" className="full keep" disabled={!questionReady || soloBusy || Boolean(disablingCurse) || solo.phase === 'found' || solo.phase === 'gave-up' || soloQuestionBlocked} onClick={() => void askSolo(constraint)}>{soloQuestionBlocked ? 'Complete or resolve active curse first' : disablingCurse ? `Disabled by ${disablingCurse.name}` : soloBusy ? 'AI is answering…' : 'Ask AI'}</button>}
+                  {solo && !askedRecord && <button type="button" className="full keep" disabled={!questionReady || soloBusy || Boolean(disablingCurse) || solo.phase === 'found' || solo.phase === 'gave-up' || soloQuestionBlocked} onClick={() => void askSolo(constraint)}>{soloQuestionBlocked ? 'Complete or resolve active curse first' : disablingCurse ? `Disabled by ${disablingCurse.name}` : soloBusy ? 'Xeno is answering…' : 'Ask Xeno'}</button>}
                   <details className="rule-notes"><summary>Rulebook notes</summary>{selectedSubject && <p className="support-line"><b>{selectedSubject.support === 'approximate' ? 'Approximate support' : selectedSubject.support === 'reference' ? 'Reference card' : selectedSubject.support === 'not-mapped' ? 'Returns “I cannot answer”' : 'Supported'}</b></p>}<ul>{orderedRuleNotes(constraint.kind, questionNotes, selectedSubject?.notes).map((note) => <li key={note}>{note}</li>)}</ul>{(definition.drawInstruction || definition.timeLimit) && <p>{definition.drawInstruction && <span><b>Hider cards after answering:</b> {definition.drawInstruction}</span>}{definition.timeLimit && <span><b>Answer time:</b> {definition.timeLimit}</span>}</p>}{definition.sourceUrl && <a href={definition.sourceUrl} target="_blank" rel="noreferrer">Open rulebook page</a>}</details>
                   {!askedRecord && <button className="danger remove" onClick={() => setState((current) => ({ ...current, constraints: current.constraints.filter((candidate) => candidate.id !== constraint.id) }))}>Remove question</button>}
                 </article>
@@ -1808,7 +1840,7 @@ export default function App() {
       {soloSetupOpen && <div className="modal-backdrop" role="presentation">
         <section className="modal" role="dialog" aria-modal="true" aria-labelledby="solo-setup-title">
           <h2 id="solo-setup-title">Start Solo game</h2>
-          <p className="helper">The AI will use walking and public transit to choose a hiding station reachable within the configured hiding time. It may later move legally through card effects. Seeking begins immediately after the route is simulated.</p>
+          <p className="helper">Xeno will use walking and public transit to choose a hiding station reachable within the configured hiding time. Xeno may later move legally through card effects. Seeking begins immediately after the route is simulated.</p>
           <MapLinkField
             label="Starting location"
             value={soloStartMapUrl}
