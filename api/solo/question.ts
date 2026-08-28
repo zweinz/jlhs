@@ -1,6 +1,7 @@
 import { SF_BOUNDS } from '../../src/data';
 import { TENTACLE_CATEGORIES } from '../../src/data';
 import { solveHiderQuestion } from '../../src/hider';
+import { nearestPoi } from '../../src/geometry';
 import { QUESTION_DEFINITIONS, RULEBOOK_DISTANCE_CHOICES } from '../../src/questions';
 import { MEASURING_SUBJECTS, SF_MATCHING_SUBJECTS, selectableSubjects } from '../../src/rulebook';
 import { nearestStreetOrientation } from '../../src/rulebookGeometry';
@@ -53,7 +54,9 @@ export function randomizeCandidates(constraint: Constraint, session: SecretSoloS
     values = SF_MATCHING_SUBJECTS
       .filter((subject) => subject.id !== constraint.category && (subject.id !== 'transit-route' || constraint.category === 'transit-route'))
       .map((subject) => ({
-        ...constraint, category: subject.id, regionId: subject.id === 'transit-route' ? constraint.regionId : undefined,
+        ...constraint,
+        category: subject.id,
+        regionId: subject.id === 'transit-route' ? constraint.regionId : nearestPoi(subject.id, constraint.origin)?.id,
         name: `${QUESTION_DEFINITIONS['matching-region'].label} · ${subject.label}`,
       }));
   } else if (constraint.kind === 'tentacle') {
@@ -360,9 +363,21 @@ export default async function handler(request: Request) {
       advancePersistentEffects(session);
     }
     const cardState = publicCardState(session);
+    const answeredConstraintPatch: Partial<Constraint> = {
+      name: constraint.name,
+      kind: constraint.kind,
+      enabled: true,
+      answer,
+      answerSet: true,
+      distanceMiles: constraint.distanceMiles,
+      direction: constraint.direction,
+      category: constraint.category,
+      regionId: resolvedRegionId ?? constraint.regionId,
+    };
     return Response.json({
       token: await seal(session),
       answer,
+      answeredConstraintPatch,
       displayText,
       resolvedRegionId,
       photoUrl,

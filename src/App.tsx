@@ -432,11 +432,10 @@ function browserPosition() {
 function keepMobileFieldVisible(element: HTMLElement) {
   if (!window.matchMedia('(max-width: 819px)').matches) return;
   const reveal = () => {
-    if (element.isConnected) element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    if (element.isConnected) element.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
   };
   requestAnimationFrame(reveal);
-  window.setTimeout(reveal, 280);
-  window.setTimeout(reveal, 650);
+  window.setTimeout(reveal, 350);
 }
 
 function answerOptions(kind: QuestionKind) {
@@ -537,6 +536,7 @@ export default function App() {
   const [curseVetoReason, setCurseVetoReason] = useState<'not-available' | 'unsafe' | 'closed' | 'other'>('not-available');
   const [curseVetoNote, setCurseVetoNote] = useState('');
   const [finishMapUrl, setFinishMapUrl] = useState('');
+  const [finishPosition, setFinishPosition] = useState<Position | undefined>();
   const [hangmanGuess, setHangmanGuess] = useState('');
   const [currentLocationVisible, setCurrentLocationVisible] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<Position | undefined>();
@@ -1659,7 +1659,7 @@ export default function App() {
         totalCardsDrawn?: number; totalCardsKept?: number; phase?: SoloClientSession['phase']; error?: string;
         questionUses?: Record<string, number>;
         outcome?: SoloQuestionRecord['outcome']; playedCardAnnouncements?: string[]; cardState?: SoloPublicCardState;
-        replacementConstraint?: Constraint; randomizedFrom?: string; randomizedTo?: string;
+        replacementConstraint?: Constraint; answeredConstraintPatch?: Partial<Constraint>; randomizedFrom?: string; randomizedTo?: string;
         geminiFallbackReason?: 'call-limit' | 'rate-limit' | 'budget' | 'unavailable' | 'error';
         geminiFallbackDetails?: string[];
       };
@@ -1667,10 +1667,10 @@ export default function App() {
         console.warn(`[Solo Gemini fallback] ${body.geminiFallbackReason ?? 'unknown'}: ${detail}`);
       });
       if (!response.ok || !body.token || !body.displayText || (body.outcome !== 'vetoed' && !body.answer)) throw new Error(body.error ?? 'Xeno could not answer.');
-      const effectiveConstraint = body.replacementConstraint ?? constraint;
+      const effectiveConstraint: Constraint = { ...constraint, ...(body.replacementConstraint ?? {}), ...(body.answeredConstraintPatch ?? {}) };
       if (body.outcome !== 'vetoed' && body.answer) patchConstraint(
         constraint.id,
-        answeredSoloConstraint(constraint, body.replacementConstraint, body.answer, body.resolvedRegionId),
+        body.answeredConstraintPatch ?? answeredSoloConstraint(constraint, body.replacementConstraint, body.answer, body.resolvedRegionId),
       );
       if (body.outcome === 'vetoed') patchConstraint(constraint.id, vetoedSoloConstraint(constraint));
       resetMapForMovement(body.cardState);
@@ -1815,6 +1815,10 @@ export default function App() {
   };
 
   const checkSoloCurrentLocation = () => {
+    if (finishPosition) {
+      void checkSoloPosition(finishPosition);
+      return;
+    }
     if (!navigator.geolocation) {
       setMessage('Location is unavailable. Open the pin fallback and paste your current Google Maps location.');
       return;
@@ -1872,6 +1876,7 @@ export default function App() {
     setSolo(undefined);
     setMenuOpen(false);
     setFinishMapUrl('');
+    setFinishPosition(undefined);
     setSoloPreview(undefined);
     setSoloAnswerSheet(undefined);
     setGameSummaryOpen(false);
@@ -1951,7 +1956,7 @@ export default function App() {
         <span><b>{solo.pausedAt ? 'Paused' : solo.phase === 'end-game' ? 'End game' : solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Revealed' : 'Seeking'} · {formatElapsedTime(solo.reveal?.elapsedHidingSeconds ?? soloElapsed)}</b><small>{solo.cardState ? `${solo.cardState.handCount}/${solo.cardState.maxHandSize} hand · ${solo.cardState.deckCount} deck` : `${solo.cardsDrawn} drawn · ${solo.cardsKept} kept`}</small></span>
         <div className="solo-status-actions">
           <button type="button" className="secondary" onClick={() => void toggleSoloClock()} disabled={soloBusy || solo.phase === 'found' || solo.phase === 'gave-up'}>{solo.pausedAt ? 'Resume' : 'Pause'}</button>
-          <button type="button" onClick={checkSoloCurrentLocation} disabled={soloBusy || Boolean(solo.pausedAt) || solo.phase === 'found' || solo.phase === 'gave-up'}>{soloBusy ? 'Checking…' : 'Check location'}</button>
+          <button type="button" onClick={checkSoloCurrentLocation} disabled={soloBusy || Boolean(solo.pausedAt) || solo.phase === 'found' || solo.phase === 'gave-up'}>{soloBusy ? 'Checking…' : finishPosition ? 'Check pasted pin' : 'Check location'}</button>
         </div>
       </nav> : <>
         <nav className="mode-switch" aria-label="Player mode">
@@ -1967,7 +1972,7 @@ export default function App() {
           }}>
             <summary className="solo-panel-summary"><span>Xeno</span><small>{solo.phase === 'found' ? 'Found' : solo.phase === 'gave-up' ? 'Resigned' : `${solo.cardState?.handCount ?? 0} cards · ${soloVisibleCurses.length} curses`}</small></summary>
             <p className="helper">Xeno may move through legal card effects. Physical curse compliance and completion reports are honor-system based.</p>
-            {solo.phase !== 'found' && solo.phase !== 'gave-up' && <p className="helper">When you think you’ve reached Xeno, choose “Check if we found the hider.” The game compares your device’s current position with Xeno’s hiding position.</p>}
+            {solo.phase !== 'found' && solo.phase !== 'gave-up' && <p className="helper">When you think you’ve reached Xeno, use Check location. It uses a prepared Google Maps pin when one is present, otherwise your device’s current position.</p>}
             {solo.cardState && <>
               <details className="solo-hand">
                 <summary><span>Private hand</span><b>{solo.cardState.handCount} / {solo.cardState.maxHandSize}</b></summary>
@@ -2027,8 +2032,18 @@ export default function App() {
             </>}
             {solo.phase !== 'found' && solo.phase !== 'gave-up' && <details>
               <summary>Can’t share your device’s location? Use a Google Maps pin</summary>
-              <p className="helper">Paste a Google Maps link for where you are. The game will compare that pin with Xeno’s hiding position instead of using your device’s location.</p>
-              <MapLinkField label="Google Maps link for my current location" value={finishMapUrl} onChange={setFinishMapUrl} onResolved={(position) => void checkSoloPosition(position)} onMessage={setMessage} />
+              <p className="helper">Paste a Google Maps link for where you are. Once the pin is ready, the main Check location button uses it instead of device location.</p>
+              <MapLinkField
+                label="Google Maps link for my current location"
+                value={finishMapUrl}
+                onChange={(value) => { setFinishMapUrl(value); setFinishPosition(undefined); }}
+                onResolved={(position) => setFinishPosition(position)}
+                onMessage={setMessage}
+              />
+              {finishPosition && <div className="prepared-location">
+                <p className="success-line">Pasted pin ready · use Check pasted pin above</p>
+                <button type="button" className="secondary" onClick={() => { setFinishMapUrl(''); setFinishPosition(undefined); }}>Use device location instead</button>
+              </div>}
             </details>}
             {solo.reveal && <div className="solo-reveal">
               <h3>{solo.reveal.reason === 'found' ? 'Xeno found' : solo.reveal.reason === 'peek' ? 'Xeno’s current location' : 'Xeno’s hiding spot revealed'}</h3>
@@ -2381,8 +2396,8 @@ export default function App() {
           <div className="summary-hero"><span aria-hidden="true">{solo.reveal.reason === 'found' ? '★' : '◆'}</span><div><h2 id="game-summary-title">{solo.reveal.reason === 'found' ? 'You found Xeno!' : 'Round ended'}</h2><p>{solo.reveal.reason === 'found' ? `Found in ${formatElapsedTime(solo.reveal.elapsedHidingSeconds ?? 0)}` : 'Xeno’s hiding spot has been revealed.'}</p></div></div>
           <div className="summary-score"><span>Final hider score</span><strong>{Math.floor((solo.reveal.elapsedHidingSeconds ?? 0) / 60) + (solo.reveal.timeBonusMinutes ?? 0)} min</strong><small>{Math.floor((solo.reveal.elapsedHidingSeconds ?? 0) / 60)} active + {solo.reveal.timeBonusMinutes ?? 0} bonus</small></div>
           <dl className="summary-stats"><div><dt>Active time</dt><dd>{formatElapsedTime(solo.reveal.elapsedHidingSeconds ?? 0)}</dd></div><div><dt>Paused</dt><dd>{formatElapsedTime(solo.reveal.pausedSeconds ?? 0)} · {solo.reveal.pauseCount ?? 0}×</dd></div><div><dt>Questions</dt><dd>{solo.reveal.questionsAsked ?? Object.keys(solo.questions).length}</dd></div><div><dt>Xeno vetoes</dt><dd>{solo.reveal.xenoVetoes ?? 0}</dd></div><div><dt>Randomized</dt><dd>{solo.reveal.randomizations ?? 0}</dd></div><div><dt>Moves</dt><dd>{solo.reveal.movementHistory?.filter((move) => move.reason !== 'initial').length ?? 0}</dd></div></dl>
-          <section><h3>Curse and card review</h3>{solo.cardState?.playHistory.length ? <ol className="summary-history">{solo.cardState.playHistory.map((entry, index) => <li key={`${index}-${entry}`}>{entry}</li>)}</ol> : <p className="helper">No curse or card events were recorded.</p>}</section>
-          <details><summary>Route and final location</summary><p><b>Original start</b><br />{(solo.startPosition ?? solo.reveal.station.position).lat.toFixed(5)}, {(solo.startPosition ?? solo.reveal.station.position).lng.toFixed(5)}</p><p><b>Central station</b><br />{solo.reveal.station.name}</p><p><b>Journey</b><br />{Math.round(solo.reveal.route.durationSeconds / 60)} min · {solo.reveal.route.summary.join(' → ')}</p><div className="map-place-actions"><a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open final hiding pin</a></div></details>
+          <section className="game-summary-section"><h3>Curse and card review</h3>{solo.cardState?.playHistory.length ? <ol className="summary-history">{solo.cardState.playHistory.map((entry, index) => <li key={`${index}-${entry}`}>{entry}</li>)}</ol> : <p className="helper">No curse or card events were recorded.</p>}</section>
+          <section className="game-summary-section"><h3>Route and final location</h3><p><b>Original start</b><br />{(solo.startPosition ?? solo.reveal.station.position).lat.toFixed(5)}, {(solo.startPosition ?? solo.reveal.station.position).lng.toFixed(5)}</p><p><b>Central station</b><br />{solo.reveal.station.name}</p><p><b>Journey</b><br />{Math.round(solo.reveal.route.durationSeconds / 60)} min · {solo.reveal.route.summary.join(' → ')}</p><div className="map-place-actions"><a href={googleMapsLinkForPosition(solo.reveal.spot)} target="_blank" rel="noreferrer">Open final hiding pin</a></div></section>
           <div className="two-buttons modal-actions"><button type="button" className="secondary" onClick={() => setGameSummaryOpen(false)}>Back to map</button><button type="button" className="keep" onClick={exitSolo}>Exit Solo</button></div>
         </section>
       </div>}

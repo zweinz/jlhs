@@ -32,6 +32,7 @@ import { createDeck } from './cards';
 import type { SharedState } from './types';
 import { publicCardState } from '../api/_solo-cards';
 import { pois } from './data';
+import { solveHiderQuestion } from './hider';
 
 describe('Solo question accounting', () => {
   it('multiplies draw costs for repeated cards', () => {
@@ -702,6 +703,17 @@ describe('Solo token and card-session security', () => {
     expect(matching.some((candidate) => candidate.category === 'transit-route')).toBe(false);
     expect(matching.some((candidate) => candidate.category === 'zip-code')).toBe(true);
     expect(matching.every((candidate) => candidate.kind === 'matching-region' && candidate.category !== 'museum')).toBe(true);
+    const consulateReplacement = matching.find((candidate) => candidate.category === 'foreign-consulate')!;
+    expect(consulateReplacement.regionId).toMatch(/^sf:foreign-consulate:/);
+
+    const libraryOriginal = {
+      id: 'library', name: 'Matching · Library', kind: 'matching-region' as const, enabled: true, answer: 'yes' as const,
+      origin: { lat: 37.71, lng: -122.52 }, category: 'library',
+    };
+    const consulateAtSamePin = { ...consulateReplacement, origin: libraryOriginal.origin };
+    const hiddenPosition = { lat: 37.71, lng: -122.49 };
+    expect(solveHiderQuestion(libraryOriginal, hiddenPosition).answer).toBe('no');
+    expect(solveHiderQuestion(consulateAtSamePin, hiddenPosition).answer).toBe('yes');
 
     value.blockedQuestionKeys = [canonicalQuestionKey(matching[0])];
     expect(randomizeCandidates({
@@ -835,6 +847,12 @@ describe('Solo token and card-session security', () => {
       expect(response.status).toBe(200);
       expect(body.outcome).toBe('randomized');
       expect(body.replacementConstraint.distanceMiles).not.toBe(original.distanceMiles);
+      expect(body.answeredConstraintPatch).toMatchObject({
+        distanceMiles: body.replacementConstraint.distanceMiles,
+        answer: body.answer,
+        answerSet: true,
+      });
+      expect(body.answeredConstraintPatch).not.toHaveProperty('origin');
       expect(body.randomizedFrom).toBe(original.name);
       expect(body.randomizedTo).toBe(body.replacementConstraint.name);
       expect(body.playedCardAnnouncements).toContain(`Xeno played Randomize question: “${original.name}” was replaced with “${body.replacementConstraint.name}”.`);

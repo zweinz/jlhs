@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CARD_CATALOG, UNPLAYABLE_AI_CURSES, cardIdFromInstance, createDeck, deckCatalogCount, drawReward, enforceHandLimit, type CardInstanceId } from './cards';
 import { GEMINI_BUDGET_CONSTANTS, chooseCardStrategy, groundedPlace } from '../api/_solo-gemini';
-import { SOLO_MAZE_SIZE, SPOTTY_MEMORY_CATEGORIES, advancePersistentEffects, curseCadenceAllows, deterministicMazeSvg, fallbackKeep, finalTimeBonusMinutes, legalPostAnswerCards, legalResponseCards, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardState } from '../api/_solo-cards';
+import { SOLO_MAZE_SIZE, SPOTTY_MEMORY_CATEGORIES, advancePersistentEffects, curseCadenceAllows, deterministicMazeSvg, enforceKeepPriorities, fallbackKeep, finalTimeBonusMinutes, legalPostAnswerCards, legalResponseCards, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardState } from '../api/_solo-cards';
 import type { SecretSoloSession } from '../api/_solo-session';
 import type { Constraint } from './types';
 
@@ -54,10 +54,15 @@ describe('official Xeno hider deck', () => {
     expect(deck.hand.length).toBeLessThanOrEqual(6);
   });
 
-  it('takes response power-ups ahead of time bonuses early, then shifts toward scoring', () => {
-    const choices: CardInstanceId[] = ['time-12#1', 'veto#1', 'randomize#1'];
-    expect(fallbackKeep(choices, 2, 3).map(cardIdFromInstance)).toEqual(['veto', 'randomize']);
-    expect(cardIdFromInstance(fallbackKeep(choices, 1, 12)[0])).toBe('time-12');
+  it('keeps Move, Randomize, and Veto ahead of every time bonus at every stage', () => {
+    const choices: CardInstanceId[] = ['time-12#1', 'veto#1', 'randomize#1', 'move#1', 'time-6#1'];
+    expect(fallbackKeep(choices, 4, 3).map(cardIdFromInstance)).toEqual(['move', 'randomize', 'veto', 'time-12']);
+    expect(cardIdFromInstance(fallbackKeep(choices, 1, 12)[0])).toBe('move');
+  });
+
+  it('overrides a model keep that drops a strategic card for a lower-priority card', () => {
+    const drawn: CardInstanceId[] = ['time-8#1', 'move#1', 'time-4#1', 'lemon-phylactery#1'];
+    expect(enforceKeepPriorities(drawn, ['time-4#1', 'lemon-phylactery#1'], 2).map(cardIdFromInstance)).toEqual(['move', 'time-8']);
   });
 
   it('keeps Veto and Randomize over 2-minute bonuses when the hand overflows', () => {
@@ -75,7 +80,7 @@ describe('official Xeno hider deck', () => {
   it('ranks response cards and immediately playable curses above 4-minute bonuses', () => {
     const choices: CardInstanceId[] = ['time-4#1', 'veto#1', 'randomize#1', 'lemon-phylactery#1'];
     expect(fallbackKeep(choices, 3, 13).map(cardIdFromInstance)).toEqual([
-      'veto', 'randomize', 'lemon-phylactery',
+      'randomize', 'veto', 'lemon-phylactery',
     ]);
     expect(cardIdFromInstance(fallbackKeep(['time-12#1', 'time-4#1', 'lemon-phylactery#1'], 1, 13)[0])).toBe('time-12');
   });
@@ -299,10 +304,10 @@ describe('official Xeno hider deck', () => {
   it('generates the same solvable maze representation from the same seed', () => {
     const first = deterministicMazeSvg('game:4');
     expect(first).toBe(deterministicMazeSvg('game:4'));
-    expect(SOLO_MAZE_SIZE).toBe(21);
-    expect(first).toContain('viewBox="0 0 294 294"');
-    expect(first.match(/<path /g)?.length).toBeGreaterThan(400);
-    expect(first).toContain('Challenging 21 by 21 solvable maze');
+    expect(SOLO_MAZE_SIZE).toBe(41);
+    expect(first).toContain('viewBox="0 0 410 410"');
+    expect(first.match(/<path /g)?.length).toBeGreaterThan(1_600);
+    expect(first).toContain('Challenging 41 by 41 solvable maze');
     expect(first).toContain('START');
     expect(first).toContain('END');
   });

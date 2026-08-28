@@ -130,11 +130,13 @@ export function createDeck(random: () => number = Math.random): DeckState {
 
 export function fallbackCardRank(instance: CardInstanceId) {
   const card = cardForInstance(instance);
+  if (card.id === 'move') return 1_300;
+  if (card.id === 'randomize') return 1_200;
+  if (card.id === 'veto') return 1_100;
   if (card.kind === 'time-bonus') {
     const minutes = card.smallMinutes ?? 0;
-    return minutes >= 6 ? 1_000 + minutes : 800 + minutes;
+    return minutes >= 8 ? 1_000 + minutes : 800 + minutes;
   }
-  if (card.id === 'veto' || card.id === 'randomize') return 950;
   if (card.kind === 'powerup') return card.id === 'expand-hand' ? 850 : card.id === 'duplicate' ? 800 : 700;
   if (!card.aiPlayable) return 0;
   return card.uncertainCasting ? 250 : 900;

@@ -1,6 +1,6 @@
 import { cardForInstance, type CardInstanceId } from '../src/cards';
 import type { Constraint, Position } from '../src/types';
-import { GEMINI_CALL_LIMIT, MAPS_CALL_LIMIT, fallbackKeep, fallbackPlay, legalPostAnswerCards, responseCardCanActAs } from './_solo-cards';
+import { enforceKeepPriorities, GEMINI_CALL_LIMIT, MAPS_CALL_LIMIT, fallbackKeep, fallbackPlay, legalPostAnswerCards, responseCardCanActAs } from './_solo-cards';
 import type { SecretSoloSession } from './_solo-session';
 
 declare const process: { env: Record<string, string | undefined> };
@@ -193,7 +193,7 @@ export async function chooseCardStrategy(
     strategyRoll: crypto.getRandomValues(new Uint32Array(1))[0] % 100,
   });
   const prompt = JSON.stringify({
-    instruction: 'Choose which newly drawn cards to keep and optionally one legal card to play. A newly drawn card may be played immediately only if you also keep that exact card. During questions 1–8, actively take and spend useful non-curse power-ups instead of hoarding them; Veto and Randomize are especially early-game cards. Never choose a 2- or 4-minute bonus over Veto, Randomize, or an immediately playable curse without an uncertain casting condition. Six-, eight-, and twelve-minute bonuses remain premium scoring cards. Prefer time bonuses over curses with uncertain casting conditions. Later, retain useful endgame cards and premium time bonuses. Use strategyRoll to avoid predictable play. Return only schema-valid JSON. Never invent card ids.',
+    instruction: 'Choose which newly drawn cards to keep and optionally one legal card to play. A newly drawn card may be played immediately only if you also keep that exact card. The strict keep priority begins Move first, Randomize second, and Veto third; these three outrank every time bonus and other card. After them, prefer 12- and 8-minute bonuses. During questions 1–8, actively take and spend useful non-curse power-ups instead of hoarding them. Prefer time bonuses over curses with uncertain casting conditions. Later, retain useful endgame cards and premium time bonuses. Use strategyRoll to avoid predictable play. Return only schema-valid JSON. Never invent card ids.',
     state: context,
   });
 
@@ -226,9 +226,11 @@ export async function chooseCardStrategy(
     gemini.spentMicros += Math.ceil(measured.input * INPUT_MICROS_PER_TOKEN + measured.output * OUTPUT_MICROS_PER_TOKEN);
     const parsed = JSON.parse(responseText(body) ?? '') as { keeps?: unknown; playCard?: unknown };
     if (!validKeeps(groups, parsed.keeps)) throw new Error('Gemini returned invalid keep choices.');
-    const playCard = typeof parsed.playCard === 'string' ? parsed.playCard as CardInstanceId : undefined;
+    const keeps = parsed.keeps.map((kept, index) => enforceKeepPriorities(groups[index].drawn, kept, groups[index].keep));
+    let playCard = typeof parsed.playCard === 'string' ? parsed.playCard as CardInstanceId : undefined;
     if (playCard && !legalPlay.includes(playCard)) throw new Error('Gemini returned an illegal card play.');
-    return { keeps: parsed.keeps, playCard, source: 'gemini' };
+    if (playCard && !session.deck.hand.includes(playCard) && !keeps.some((kept) => kept.includes(playCard!))) playCard = undefined;
+    return { keeps, playCard, source: 'gemini' };
   } catch (error) {
     const detail = failureDetail('Card strategy', error);
     console.warn(`[Solo Gemini fallback] ${detail}`);

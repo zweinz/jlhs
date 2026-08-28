@@ -331,7 +331,7 @@ function hangmanWord(session: SecretSoloSession) {
   return HANGMAN_WORDS[seed % HANGMAN_WORDS.length];
 }
 
-export const SOLO_MAZE_SIZE = 21;
+export const SOLO_MAZE_SIZE = 41;
 
 export function deterministicMazeSvg(seedText: string) {
   const size = SOLO_MAZE_SIZE;
@@ -352,7 +352,7 @@ export function deterministicMazeSvg(seedText: string) {
     visited[ny][nx] = true;
     stack.push([nx, ny]);
   }
-  const cell = 14;
+  const cell = 10;
   const lines: string[] = [];
   for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
     if (y === 0 && x !== 0) lines.push(`<path d="M${x * cell} ${y * cell}h${cell}"/>`);
@@ -522,16 +522,31 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
   return { played: true, announcement, pending: effect.status === 'pending' };
 }
 
-function fallbackKeepRank(instance: CardInstanceId, questionNumber: number) {
-  const card = cardForInstance(instance);
-  if (questionNumber <= 8 && card.kind === 'powerup') {
-    return fallbackCardRank(instance) + (card.id === 'veto' || card.id === 'randomize' ? 800 : 500);
-  }
-  return fallbackCardRank(instance);
+export function fallbackKeep(drawn: CardInstanceId[], keep: number, _questionNumber = 0) {
+  return [...drawn].sort((a, b) => fallbackCardRank(b) - fallbackCardRank(a)).slice(0, keep);
 }
 
-export function fallbackKeep(drawn: CardInstanceId[], keep: number, questionNumber = 0) {
-  return [...drawn].sort((a, b) => fallbackKeepRank(b, questionNumber) - fallbackKeepRank(a, questionNumber)).slice(0, keep);
+const strategicKeepIds = new Set<CardId>(['veto', 'randomize', 'move']);
+
+export function enforceKeepPriorities(drawn: CardInstanceId[], requested: CardInstanceId[], keep: number) {
+  const slots = Math.min(keep, drawn.length);
+  const premium = [...drawn]
+    .filter((instance) => cardForInstance(instance).kind === 'time-bonus' && (cardForInstance(instance).smallMinutes ?? 0) >= 8)
+    .sort((a, b) => fallbackCardRank(b) - fallbackCardRank(a));
+  const strategic = drawn
+    .filter((instance) => strategicKeepIds.has(cardIdFromInstance(instance)))
+    .sort((a, b) => fallbackCardRank(b) - fallbackCardRank(a));
+  const required = [...strategic, ...premium].slice(0, slots);
+  const chosen = [...required];
+  for (const instance of requested) {
+    if (chosen.length >= slots) break;
+    if (drawn.includes(instance) && !chosen.includes(instance)) chosen.push(instance);
+  }
+  for (const instance of fallbackKeep(drawn, slots)) {
+    if (chosen.length >= slots) break;
+    if (!chosen.includes(instance)) chosen.push(instance);
+  }
+  return chosen;
 }
 
 export function fallbackPlay(session: SecretSoloSession) {

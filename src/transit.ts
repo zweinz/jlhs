@@ -59,9 +59,44 @@ export function filterStationsBySearch(stations: Poi[], search: string) {
 }
 
 const knownRouteIds = new Set(transitRoutes.map((route) => route.id));
+// Confirmed stop-level GTFS associations missing from the precomputed
+// game-sheet snapshot. These come from another directional stop/platform with
+// the exact same GTFS stop name, not merely from a nearby cross-street stop.
+const stationRouteOverrides: Record<string, string[]> = {
+  'sf:game-valid-station:021': ['NBUS', 'NOWL'],
+  'sf:game-valid-station:022': ['NBUS', 'NOWL'],
+  'sf:game-valid-station:023': ['NBUS', 'NOWL'],
+  'sf:game-valid-station:043': ['29'],
+  'sf:game-valid-station:044': ['28', '28R', '91'],
+  'sf:game-valid-station:045': ['28', '28R', '29', '91'],
+  'sf:game-valid-station:049': ['NBUS', 'NOWL'],
+  'sf:game-valid-station:056': ['N'],
+  'sf:game-valid-station:066': ['91'],
+  'sf:game-valid-station:075': ['1X'],
+  'sf:game-valid-station:078': ['1X'],
+  'sf:game-valid-station:088': ['1X'],
+  'sf:game-valid-station:089': ['31'],
+  'sf:game-valid-station:091': ['NOWL'],
+  'sf:game-valid-station:092': ['91'],
+  'sf:game-valid-station:100': ['90', '91'],
+  'sf:game-valid-station:101': ['90'],
+  'sf:game-valid-station:103': ['90'],
+  'sf:game-valid-station:106': ['FBUS', 'LOWL'],
+  'sf:game-valid-station:121': ['90'],
+  'sf:game-valid-station:130': ['90'],
+  'sf:game-valid-station:131': ['90'],
+  'sf:game-valid-station:136': ['91'],
+  'sf:game-valid-station:145': ['91'],
+  'sf:game-valid-station:146': ['91'],
+  'sf:game-valid-station:152': ['KBUS', 'LOWL'],
+  'sf:game-valid-station:154': ['52'],
+};
 const stationRoutes = new Map(validStations.map((station) => [
   station.id,
-  (stationRouteData.stationRoutes[station.id] ?? []).filter((routeId) => knownRouteIds.has(routeId)),
+  [...new Set([
+    ...(stationRouteData.stationRoutes[station.id] ?? []),
+    ...(stationRouteOverrides[station.id] ?? []),
+  ])].filter((routeId) => knownRouteIds.has(routeId)),
 ]));
 
 export function routesForStation(stationId: string) {

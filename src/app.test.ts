@@ -235,6 +235,14 @@ describe('missing measuring and matching geometry', () => {
     expect(landmassAt(base('radar').origin)?.properties.name).toBeTruthy();
   });
 
+  it('reads the south-to-north street grid without mirroring Jefferson and Taylor', () => {
+    const jeffersonAndTaylor = { lat: 37.80832, lng: -122.415514 };
+    expect(nearestStreet(jeffersonAndTaylor)).toBe('JEFFERSON ST');
+    expect(nearestStreetOrientation(jeffersonAndTaylor)).toEqual({ name: 'JEFFERSON ST', bearing: 81 });
+    expect(elevationAt({ lat: 37.7544, lng: -122.4477 })).toBeGreaterThan(700);
+    expect(elevationAt({ lat: 37.7955, lng: -122.3937 })).toBeLessThan(50);
+  });
+
   it('models the requested ZIP-code matching level with complete merged regions', () => {
     expect(zipCodeAreas.features).toHaveLength(27);
     expect(new Set(zipCodeAreas.features.map((feature) => feature.properties.name)).size).toBe(27);
@@ -424,6 +432,45 @@ describe('transit layers and cuts', () => {
     expect(routesForStation(rapidStop.id)).toEqual(expect.arrayContaining(['38', '38R']));
     expect(routesForStation(localOnlyStop.id)).toContain('38');
     expect(routesForStation(localOnlyStop.id)).not.toContain('38R');
+
+    const oceanAndLee = validStations.find((station) => station.name === 'Ocean Ave & Lee St')!;
+    expect(routesForStation(oceanAndLee.id)).toContain('29');
+    const sunsetQuestion = { ...base('matching-region'), category: 'transit-route', regionId: '29' };
+    expect(stationIdsMatchingTransitQuestions([oceanAndLee.id], [{ ...sunsetQuestion, answer: 'yes' }])).toEqual([oceanAndLee.id]);
+    expect(stationIdsMatchingTransitQuestions([oceanAndLee.id], [{ ...sunsetQuestion, answer: 'no' }])).toEqual([]);
+
+    const sameNamePeerServices: Record<string, string[]> = {
+      'sf:game-valid-station:021': ['NBUS', 'NOWL'],
+      'sf:game-valid-station:022': ['NBUS', 'NOWL'],
+      'sf:game-valid-station:023': ['NBUS', 'NOWL'],
+      'sf:game-valid-station:043': ['29'],
+      'sf:game-valid-station:044': ['28', '28R', '91'],
+      'sf:game-valid-station:045': ['28', '28R', '29', '91'],
+      'sf:game-valid-station:049': ['NBUS', 'NOWL'],
+      'sf:game-valid-station:056': ['N'],
+      'sf:game-valid-station:066': ['91'],
+      'sf:game-valid-station:075': ['1X'],
+      'sf:game-valid-station:078': ['1X'],
+      'sf:game-valid-station:088': ['1X'],
+      'sf:game-valid-station:089': ['31'],
+      'sf:game-valid-station:091': ['NOWL'],
+      'sf:game-valid-station:092': ['91'],
+      'sf:game-valid-station:100': ['90', '91'],
+      'sf:game-valid-station:101': ['90'],
+      'sf:game-valid-station:103': ['90'],
+      'sf:game-valid-station:106': ['FBUS', 'LOWL'],
+      'sf:game-valid-station:121': ['90'],
+      'sf:game-valid-station:130': ['90'],
+      'sf:game-valid-station:131': ['90'],
+      'sf:game-valid-station:136': ['91'],
+      'sf:game-valid-station:145': ['91'],
+      'sf:game-valid-station:146': ['91'],
+      'sf:game-valid-station:152': ['KBUS', 'LOWL'],
+      'sf:game-valid-station:154': ['52'],
+    };
+    for (const [stationId, services] of Object.entries(sameNamePeerServices)) {
+      expect(routesForStation(stationId)).toEqual(expect.arrayContaining(services));
+    }
 
     const candidates = [rapidStop.id, localOnlyStop.id];
     const question = { ...base('matching-region'), category: 'transit-route', regionId: '38R' };

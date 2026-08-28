@@ -27,7 +27,8 @@ const clipToFrame = (area: Area) =>
 
 function gridIndex(position: Position, grid: Pick<NumericGrid, 'bounds' | 'width' | 'height'>) {
   const x = Math.max(0, Math.min(grid.width - 1, Math.floor(((position.lng - grid.bounds.west) / (grid.bounds.east - grid.bounds.west)) * grid.width)));
-  const y = Math.max(0, Math.min(grid.height - 1, Math.floor(((grid.bounds.north - position.lat) / (grid.bounds.north - grid.bounds.south)) * grid.height)));
+  // Generated rows run south-to-north; row zero is the southern edge.
+  const y = Math.max(0, Math.min(grid.height - 1, Math.floor(((position.lat - grid.bounds.south) / (grid.bounds.north - grid.bounds.south)) * grid.height)));
   return y * grid.width + x;
 }
 
@@ -43,8 +44,8 @@ function gridArea<T>(grid: Pick<NumericGrid, 'bounds' | 'width' | 'height'>, val
       if (!selected && runStart >= 0) {
         const west = grid.bounds.west + runStart * cellWidth;
         const east = grid.bounds.west + x * cellWidth;
-        const north = grid.bounds.north - y * cellHeight;
-        const south = north - cellHeight;
+        const south = grid.bounds.south + y * cellHeight;
+        const north = south + cellHeight;
         polygons.push([[[west, south], [east, south], [east, north], [west, north], [west, south]]]);
         runStart = -1;
       }
