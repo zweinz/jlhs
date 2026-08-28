@@ -17,7 +17,7 @@ import { activeMapPartition, activePoiPartition, GEOGRAPHIC_PARTITIONS, selectMa
 import { createLongPressController } from './longPress';
 import { persistManualReachBoundary, restoreManualReachBoundary } from './manualReachStorage';
 import { googleMapsLinkForPlace, googleMapsLinkForPosition, resolveGoogleMapsLink } from './mapLinks';
-import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, questionRequiresOrigin, questionRequiresTarget, RULEBOOK_DISTANCE_CHOICES } from './questions';
+import { formatMeasuredDistanceMiles, formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, questionRequiresOrigin, questionRequiresTarget, RULEBOOK_DISTANCE_CHOICES, thermometerPinDistanceMiles } from './questions';
 import {
   MATCHING_SUBJECTS,
   MEASURING_SUBJECTS,
@@ -2216,6 +2216,7 @@ export default function App() {
                 : definition.notes;
               const selectedSubject = categoryChoices.find((subject) => subject.id === category);
               const selectedPriorUses = priorUsesFor(constraint);
+              const thermometerDistanceMiles = thermometerPinDistanceMiles(constraint);
               const disablingCurse = soloVisibleCurses.find((effect) =>
                 effect.disabledCategory === constraint.kind || effect.disabledQuestionKeys?.includes(canonicalQuestionKey(constraint)));
               const tentacleChoices = constraint.kind === 'tentacle' && category !== 'transit-route'
@@ -2279,6 +2280,7 @@ export default function App() {
                   {!askedRecord && solo?.cardState?.nextQuestionFree && constraint.kind !== 'endgame-confirmation' && <p className="question-cost">Next question is free because of Impressionable Consumer · Xeno draws and keeps no cards.</p>}
                   {!askedRecord && !solo?.cardState?.nextQuestionFree && !(solo && constraint.kind === 'photo-reference' && category === 'you') && constraint.kind !== 'endgame-confirmation' && definition.baseDrawCount !== undefined && definition.baseKeepCount !== undefined && <p className="question-cost">Next reward: draw {cardsForQuestion(constraint, selectedPriorUses) + (solo?.cardState?.nextRewardExtraDraw ?? 0)}, keep {keptCardsForQuestion(constraint, selectedPriorUses)}{solo?.cardState?.nextRewardExtraDraw ? ' · Overflowing Chalice adds one draw, not one keep' : ''}.</p>}
                   {constraint.kind === 'endgame-confirmation' && !solo && questionReady && <p className="derived">Recorded result: <b>{constraint.answer === 'yes' ? 'Correct — end game active; no cards drawn' : 'Incorrect — hider draws 1 penalty card'}</b></p>}
+                  {thermometerDistanceMiles !== undefined && <p className="derived">Crow-flies distance between pins: <b>{formatMeasuredDistanceMiles(thermometerDistanceMiles)}</b></p>}
                   {constraint.kind === 'tentacle' && <p className="derived">Reach: <b>1 mile</b> · fixed by the card</p>}
                   {constraint.kind === 'matching-region' && category === 'transit-route' && <p className="derived">No distance applies. “Yes” keeps only stations where this service actually stops; “No” removes those stations.</p>}
                   {constraint.kind === 'matching-region' && category !== 'transit-route' && <p className="derived">Seeker’s match: <b>{constraint.originSet === false ? 'set the seeker pin' : matchingSource ?? 'set the seeker pin'}</b></p>}

@@ -6,7 +6,7 @@ import { activeMapPartition, activePoiPartition, selectMapPartition, selectPoiPa
 import { persistManualReachBoundary, restoreManualReachBoundary } from './manualReachStorage';
 import { combineConstraints, constraintArea, excludedArea, manualReachArea, nearestPoi, partition, partitionLabelPosition, positionInArea, questionPreviewArea, sfFrame, stationIdsOverlappingArea, stationZoneArea } from './geometry';
 import { hiderAnswer, solveHiderQuestion } from './hider';
-import { formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, RULEBOOK_DISTANCE_CHOICES } from './questions';
+import { formatMeasuredDistanceMiles, formatQuestionDistance, missingQuestionFields, orderedRuleNotes, PRIMARY_QUESTION_KINDS, QUESTION_DEFINITIONS, questionIsReady, RULEBOOK_DISTANCE_CHOICES, thermometerPinDistanceMiles } from './questions';
 import { MATCHING_SUBJECTS, MEASURING_SUBJECTS, PHOTO_SUBJECTS, SF_MATCHING_SUBJECTS, selectableSubjects } from './rulebook';
 import { districtAt, elevationAt, landmassAt, nearestStreet, nearestStreetOrientation, nearestWaterDistance, supervisorDistricts, zipCodeAreas, zipCodeAt } from './rulebookGeometry';
 import { pathDistanceMiles, pathGeoJson } from './trace';
@@ -174,6 +174,22 @@ describe('SF rulebook audit', () => {
     expect(RULEBOOK_DISTANCE_CHOICES.thermometer).toEqual([0.5, 3]);
     expect(formatQuestionDistance(0.25)).toBe('¼ mile');
     expect(formatQuestionDistance(0.5)).toBe('½ mile');
+  });
+
+  it('calculates and formats thermometer travel distance only after both pins are set', () => {
+    const thermometer = {
+      ...base('thermometer'),
+      originSet: true,
+      targetSet: true,
+      origin: { lat: 37.7749, lng: -122.4194 },
+      target: { lat: 37.7849, lng: -122.4194 },
+    };
+    const distanceMiles = thermometerPinDistanceMiles(thermometer);
+    expect(distanceMiles).toBeGreaterThan(0.68);
+    expect(distanceMiles).toBeLessThan(0.70);
+    expect(formatMeasuredDistanceMiles(distanceMiles!)).toBe('0.69 miles');
+    expect(thermometerPinDistanceMiles({ ...thermometer, targetSet: false })).toBeUndefined();
+    expect(questionIsReady({ ...thermometer, distanceMiles: 3 })).toBe(true);
   });
 
   it('does not expose hider-side matching values in AI or helper responses', () => {

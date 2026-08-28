@@ -1,3 +1,4 @@
+import * as turf from '@turf/turf';
 import type { Constraint, QuestionKind } from './types';
 
 export type QuestionDefinition = {
@@ -221,6 +222,28 @@ export function formatQuestionDistance(distanceMiles: number) {
   if (distanceMiles === 0.25) return '¼ mile';
   if (distanceMiles === 0.5) return '½ mile';
   return `${distanceMiles} mile${distanceMiles === 1 ? '' : 's'}`;
+}
+
+export function thermometerPinDistanceMiles(
+  constraint: Pick<Constraint, 'kind' | 'origin' | 'originSet' | 'target' | 'targetSet'>,
+) {
+  if (
+    constraint.kind !== 'thermometer' ||
+    constraint.originSet === false ||
+    constraint.targetSet === false ||
+    !constraint.target
+  ) return undefined;
+  return turf.distance(
+    [constraint.origin.lng, constraint.origin.lat],
+    [constraint.target.lng, constraint.target.lat],
+    { units: 'miles' },
+  );
+}
+
+export function formatMeasuredDistanceMiles(distanceMiles: number) {
+  if (distanceMiles > 0 && distanceMiles < 0.01) return '<0.01 miles';
+  const rounded = distanceMiles.toFixed(2);
+  return `${rounded} ${rounded === '1.00' ? 'mile' : 'miles'}`;
 }
 
 export const orderedRuleNotes = (
