@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { choosePanorama, chunk, photoTargetInZone, reachableStations, TARGETED_PHOTO_KINDS, verifyTransitRoute } from '../api/_solo-google';
-import { seal, unseal, type PhotoAsset, type SecretSoloSession, type StreetOrientationAsset } from '../api/_solo-session';
+import { MAX_SOLO_TOKEN_LENGTH, seal, unseal, type PhotoAsset, type SecretSoloSession, type StreetOrientationAsset } from '../api/_solo-session';
 import questionHandler, { randomizeCandidates } from '../api/solo/question';
 import streetOrientationHandler, { streetOrientationSvg } from '../api/solo/street-orientation';
 import cardEventHandler from '../api/solo/card-event';
@@ -30,7 +30,7 @@ import { primaryTransitStationIds, validStations } from './transit';
 import { isHidingPositionAllowed } from './noHideZones';
 import { createDeck } from './cards';
 import type { SharedState } from './types';
-import { publicCardState } from '../api/_solo-cards';
+import { deterministicMazeSvg, playPostAnswerCard, publicCardState } from '../api/_solo-cards';
 import { pois } from './data';
 import { solveHiderQuestion } from './hider';
 
@@ -149,23 +149,23 @@ describe('Solo camera and time rules', () => {
     expect(anyBuilding.displayText).toMatch(/at the central station/);
     expect(tallestBuilding.source).toBe('station');
     expect(tallestBuilding.heading).not.toBe(anyBuilding.heading);
-    expect(tree.source).toBe('spot');
-    expect(tree.displayText).toMatch(/at the hiding location/);
+    expect(tree.source).toBe('zone');
+    expect(tree.displayText).toMatch(/elsewhere in the hiding zone/);
     expect(soloPhotoPlan('the-sky', spot, station, 'north', 42).pitch).toBe(90);
     const selfie = soloPhotoPlan('you', spot, station, 'north', 42);
-    expect(selfie).toMatchObject({ source: 'spot', staticAssetUrl: '/solo-selfie.svg' });
+    expect(selfie).toMatchObject({ source: 'static', staticAssetUrl: '/solo-selfie.svg' });
     expect(selfie.unavailableReason).toBeUndefined();
     expect(soloPhotoPlan('trace-nearest-street-path', spot, station, 'north', 42)).toMatchObject({
       source: 'spot', generatedAsset: 'street-orientation',
     });
-    expect(soloPhotoPlan('restaurant-interior', spot, station, 'north', 42).unavailableReason).toMatch(/restaurant/i);
+    expect(soloPhotoPlan('restaurant-interior', spot, station, 'north', 42).source).toBe('zone');
   });
 
   it('has a deliberate best-effort implementation path for every Solo photo subject', () => {
     const directlyRendered = SOLO_PHOTO_SUBJECTS
       .map((subject) => subject.id)
-      .filter((kind) => !soloPhotoPlan(kind, spot, station, 'north', 42).unavailableReason);
-    const covered = new Set([...directlyRendered, ...TARGETED_PHOTO_KINDS]);
+      .filter((kind) => soloPhotoPlan(kind, spot, station, 'north', 42).source !== 'zone');
+    const covered = new Set([...directlyRendered, ...TARGETED_PHOTO_KINDS, 'widest-street', 'two-buildings']);
     expect(SOLO_PHOTO_SUBJECTS.map((subject) => subject.id).filter((kind) => !covered.has(kind))).toEqual([]);
     expect(SOLO_PHOTO_SUBJECTS.find((subject) => subject.id === 'trace-nearest-street-path')?.help).toMatch(/precomputed orientation/i);
   });
@@ -241,7 +241,7 @@ describe('Google transit request boundaries', () => {
   });
 
   it.each([
-    ['restaurant-interior', 'restaurant', /Restaurant interior.*best-effort/i, false],
+    ['restaurant-interior', 'restaurant', /Restaurant interior.*best-effort/i, true],
     ['park', 'park', /Park.*qualifying park in the hiding zone/i, true],
     ['grocery-store-aisle', 'grocery_store', /Grocery-store aisle.*best-effort/i, false],
     ['place-of-worship', 'church', /Place of worship.*best-effort/i, false],
@@ -407,6 +407,105 @@ describe('Solo token and card-session security', () => {
     const tamperedCiphertext = `${ciphertext.slice(0, tamperIndex)}${ciphertext[tamperIndex] === 'x' ? 'y' : 'x'}${ciphertext.slice(tamperIndex + 1)}`;
     const tamperedToken = `${iv}.${tamperedCiphertext}`;
     await expect(unseal<SecretSoloSession>(tamperedToken, 'solo-session')).rejects.toThrow(/invalid|expired/i);
+  });
+
+  // Reproduce the old writer for migration tests; the production writer now
+  // compacts Labyrinth and refuses to issue tokens over its normal size limit.
+  async function legacySeal(value: SecretSoloSession) {
+    const encoder = new TextEncoder();
+    const digest = await crypto.subtle.digest('SHA-256', encoder.encode(process.env.SOLO_SESSION_SECRET!));
+    const key = await crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(JSON.stringify(value)));
+    return `${Buffer.from(iv).toString('base64url')}.${Buffer.from(encrypted).toString('base64url')}`;
+  }
+
+  it('casts Labyrinth through the question API with a compact token and the full maze', async () => {
+    const value = session();
+    value.deck.drawPile = ['labyrinth#1'];
+    const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), constraint: {
+        id: 'radar', name: 'Radar · 1 mi', kind: 'radar', enabled: true, answer: 'yes', origin: value.spot, distanceMiles: 1,
+      } }),
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.token.length).toBeLessThan(10_000);
+    expect(body.cardState.activeCurses[0].mazeSvg).toBe(deterministicMazeSvg('session:1'));
+    expect(body.cardState.activeCurses[0]).not.toHaveProperty('mazeSeed');
+    const restored = await unseal<SecretSoloSession>(body.token, 'solo-session');
+    expect(restored.activeEffects?.[0]).toMatchObject({ cardId: 'labyrinth', mazeSeed: 'session:1' });
+    expect(restored.activeEffects?.[0]).not.toHaveProperty('mazeSvg');
+    restored.questionNumber = 9;
+    expect(publicCardState(restored).activeCurses[0].mazeSvg).toBe(body.cardState.activeCurses[0].mazeSvg);
+  });
+
+  it.each([false, true])('can pause, resume, and clear Labyrinth without changing its maze (legacy token: %s)', async (legacy) => {
+    const value = session();
+    value.questionNumber = 4;
+    value.deck.hand = ['labyrinth#1'];
+    value.deck.drawPile = value.deck.drawPile.filter((instance) => instance !== 'labyrinth#1');
+    expect(playPostAnswerCard(value, 'labyrinth#1').played).toBe(true);
+    const effect = value.activeEffects![0];
+    const maze = publicCardState(value).activeCurses[0].mazeSvg;
+    if (legacy) {
+      effect.mazeSvg = maze;
+      delete effect.mazeSeed;
+    }
+    let token = legacy ? await legacySeal(value) : await seal(value);
+    if (legacy) expect(token.length).toBeGreaterThan(MAX_SOLO_TOKEN_LENGTH);
+    for (const action of ['pause', 'resume'] as const) {
+      const response = await clockHandler(new Request('https://example.test/api/solo/clock', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, action }),
+      }));
+      const body = await response.json();
+      expect(response.status, JSON.stringify({ error: body.error })).toBe(200);
+      expect(body.cardState.activeCurses[0].mazeSvg).toBe(maze);
+      token = body.token;
+      expect(token.length).toBeLessThan(MAX_SOLO_TOKEN_LENGTH);
+      const restored = await unseal<SecretSoloSession>(token, 'solo-session');
+      expect(restored.activeEffects![0]).toMatchObject({ mazeSeed: 'session:4' });
+      expect(restored.activeEffects![0]).not.toHaveProperty('mazeSvg');
+    }
+    const cleared = await cardEventHandler(new Request('https://example.test/api/solo/card-event', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token, event: { type: 'clear', effectId: effect.id } }),
+    }));
+    const body = await cleared.json();
+    expect(cleared.status).toBe(200);
+    expect(body.cardState.activeCurses).toEqual([]);
+    expect(body.cardState.questionBlocked).toBe(false);
+    expect((await unseal<SecretSoloSession>(body.token, 'solo-session')).activeEffects).toEqual([]);
+  });
+
+  it('compacts recognized legacy mazes on write without mutating the caller', async () => {
+    const value = session();
+    value.questionNumber = 1;
+    value.deck.hand = ['labyrinth#1'];
+    playPostAnswerCard(value, 'labyrinth#1');
+    const effect = value.activeEffects![0];
+    effect.mazeSvg = deterministicMazeSvg('session:1');
+    delete effect.mazeSeed;
+    const token = await seal(value);
+    expect(token.length).toBeLessThan(MAX_SOLO_TOKEN_LENGTH);
+    expect(effect.mazeSvg).toBeTruthy();
+    expect((await unseal<SecretSoloSession>(token, 'solo-session')).activeEffects![0].mazeSeed).toBe('session:1');
+  });
+
+  it('does not turn legacy maze recovery into a general oversized-token bypass', async () => {
+    const value = session();
+    value.recentDecisions = ['x'.repeat(MAX_SOLO_TOKEN_LENGTH)];
+    await expect(seal(value)).rejects.toThrow(/too large/);
+    await expect(unseal(await legacySeal(value), 'solo-session')).rejects.toThrow(/invalid|expired/);
+    value.questionNumber = 1;
+    value.deck.hand = ['labyrinth#1'];
+    playPostAnswerCard(value, 'labyrinth#1');
+    value.activeEffects![0].mazeSvg = deterministicMazeSvg('session:1');
+    delete value.activeEffects![0].mazeSeed;
+    await expect(unseal(await legacySeal(value), 'solo-session')).rejects.toThrow(/invalid|expired/);
+    await expect(unseal('x'.repeat(200_001), 'solo-session')).rejects.toThrow(/too large/);
+    await expect(unseal('x'.repeat(MAX_SOLO_TOKEN_LENGTH + 1), 'solo-photo')).rejects.toThrow(/too large/);
   });
 
   it('migrates exact custom-distance history into one custom card category', async () => {
@@ -623,13 +722,20 @@ describe('Solo token and card-session security', () => {
     }
   });
 
-  it('moves the hider only after Distant Cuisine is accepted and increments the position revision', async () => {
+  it.each([false, true])('accepts Distant Cuisine without relocating Xeno (legacy panorama: %s)', async (legacyPanorama) => {
     const value = session();
+    value.questionNumber = 10;
+    value.lastRelocationQuestionNumber = 2;
+    value.positionRevision = 3;
+    value.zonePhotoScenes = { anchor: 'unchanged-photo-cache', scenes: {} };
+    value.movementHistory = [{ at: value.createdAt, reason: 'initial', station: value.station, position: value.spot }];
+    const before = structuredClone(value);
     const destination = { lat: 37.7795, lng: -122.44 };
     value.activeEffects = [{
       id: 'cuisine', cardId: 'distant-cuisine', cardInstance: 'distant-cuisine#1', name: 'Curse of the Distant Cuisine',
       description: 'Visit qualifying cuisine.', status: 'pending', startedQuestion: 1, blocksQuestions: true, blocksTransit: false,
-      proposedPosition: destination, proposedPanorama: { id: 'restaurant-pano' },
+      placeName: 'Reference Restaurant', proposedPosition: destination,
+      proposedPanorama: legacyPanorama ? { id: 'restaurant-pano' } : undefined,
       completionInstruction: 'Visit a qualifying restaurant.',
     }];
     const response = await cardEventHandler(new Request('https://example.test/api/solo/card-event', {
@@ -639,17 +745,20 @@ describe('Solo token and card-session security', () => {
     const body = await response.json();
     expect(response.status).toBe(200);
     const updated = await unseal<SecretSoloSession>(body.token, 'solo-session');
-    expect(updated.spot).toEqual(destination);
-    expect(updated.panorama.id).toBe('restaurant-pano');
-    expect(body.cardState.positionRevision).toBe(1);
+    for (const field of ['spot', 'panorama', 'station', 'stationPanorama', 'route', 'lastRelocationQuestionNumber', 'positionRevision', 'movementHistory', 'zonePhotoScenes'] as const) {
+      expect(updated[field], field).toEqual(before[field]);
+    }
+    expect(updated.activeEffects?.[0]).toMatchObject({ status: 'active', proposedPosition: destination });
+    expect(body.cardState.positionRevision).toBe(3);
+    expect(body.message).toContain('Xeno has not moved');
   });
 
-  it('rejects a Distant Cuisine move into a no-hide zone', async () => {
+  it('rejects a Distant Cuisine reference restaurant outside the hiding zone', async () => {
     const value = session();
     value.activeEffects = [{
       id: 'unsafe-cuisine', cardId: 'distant-cuisine', cardInstance: 'distant-cuisine#1', name: 'Curse of the Distant Cuisine',
       description: 'Visit qualifying cuisine.', status: 'pending', startedQuestion: 1, blocksQuestions: true, blocksTransit: false,
-      proposedPosition: { lat: 37.776, lng: -122.408 }, proposedPanorama: { id: 'unsafe-pano' },
+      placeName: 'Outside Restaurant', proposedPosition: { lat: 37.776, lng: -122.408 },
       completionInstruction: 'Visit a qualifying restaurant.',
     }];
     const response = await cardEventHandler(new Request('https://example.test/api/solo/card-event', {
@@ -657,7 +766,7 @@ describe('Solo token and card-session security', () => {
       body: JSON.stringify({ token: await seal(value), event: { type: 'accept-pending', effectId: 'unsafe-cuisine' } }),
     }));
     expect(response.status).toBe(409);
-    expect((await response.json()).error).toMatch(/no-hide zone/i);
+    expect((await response.json()).error).toMatch(/reference restaurant inside the hiding zone/i);
   });
 
   it('enforces both ten-minute Hidden Hangman waits', async () => {
@@ -907,6 +1016,87 @@ describe('Solo token and card-session security', () => {
     }
   });
 
+  it.each([
+    ['veto', false], ['veto', true], ['randomize', false], ['randomize', true],
+  ] as const)('charges %s to the normal allowance only when it is not copied (%s)', async (action, copied) => {
+    const value = session();
+    const source = `${action}#1` as const;
+    value.deck = {
+      drawPile: ['time-2#1', 'time-2#2', 'time-2#3'],
+      hand: [source, 'expand-hand#1', ...(copied ? ['duplicate#1' as const] : [])],
+      discardPile: [], usedPile: [], maxHandSize: 6,
+    };
+    value.gemini = { calls: 0, mapsCalls: 0, inputTokens: 0, outputTokens: 0, spentMicros: 0, reservedMapsMicros: 0, recentCallTimes: [], fallback: false };
+    process.env.GEMINI_API_KEY = 'test-key';
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('countTokens')) return Response.json({ totalTokens: 50 });
+      const prompt = JSON.parse(JSON.parse(String(init?.body)).input);
+      const result = prompt.legal ? { action, card: source } : {
+        keeps: prompt.state.drawGroups.map((group: { keep: number; cards: { instance: string }[] }) => group.cards.slice(0, group.keep).map((card) => card.instance)),
+        playCard: 'expand-hand#1',
+      };
+      return Response.json({ output_text: JSON.stringify(result) });
+    }));
+    try {
+      const response = await questionHandler(new Request('https://example.test/api/solo/question', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: await seal(value), constraint: {
+          id: 'q', name: 'Radar · 1 mi', kind: 'radar', enabled: true, answer: 'yes', origin: value.spot, distanceMiles: 1,
+        } }),
+      }));
+      const body = await response.json();
+      expect(response.status).toBe(200);
+      expect(body.outcome).toBe(action === 'veto' ? 'vetoed' : 'randomized');
+      const restored = await unseal<SecretSoloSession>(body.token, 'solo-session');
+      expect(restored.deck.usedPile).toEqual(copied ? ['duplicate#1', 'expand-hand#1'] : [source]);
+      expect(restored.deck.maxHandSize).toBe(copied ? 7 : 6);
+      expect(body.playedCardAnnouncements).toHaveLength(copied ? 2 : 1);
+      if (copied) expect(restored.deck.hand).toContain(source);
+    } finally {
+      vi.unstubAllGlobals();
+      delete process.env.GEMINI_API_KEY;
+    }
+  });
+
+  it('plays a free Duplicate between questions after a blocking curse is cleared', async () => {
+    const value = session();
+    value.questionNumber = 1;
+    value.deck = { drawPile: [], hand: ['luxury-car#1', 'duplicate#1', 'bird-guide#1'], discardPile: [], usedPile: [], maxHandSize: 6 };
+    expect(playPostAnswerCard(value, 'luxury-car#1').played).toBe(true);
+    const response = await cardEventHandler(new Request('https://example.test/api/solo/card-event', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), event: { type: 'clear', effectId: value.activeEffects![0].id } }),
+    }));
+    const body = await response.json();
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    const restored = await unseal<SecretSoloSession>(body.token, 'solo-session');
+    expect(restored.questionNumber).toBe(1);
+    expect(restored.lastCurseQuestionNumber).toBe(1);
+    expect(restored.deck.usedPile).toEqual(['luxury-car#1', 'duplicate#1']);
+    expect(restored.deck.hand).toEqual(['bird-guide#1']);
+    expect(body.playedCardAnnouncements).toEqual([expect.stringContaining('Duplicate another card as Curse of the Bird Guide')]);
+    expect(body.cardState.activeCurses).toEqual([expect.objectContaining({ cardId: 'bird-guide' })]);
+  });
+
+  it('does not immediately replay a copied curse vetoed as unsafe', async () => {
+    const value = session();
+    value.questionNumber = 1;
+    value.deck = { drawPile: [], hand: ['bird-guide#1', 'duplicate#1', 'duplicate#2'], discardPile: [], usedPile: [], maxHandSize: 6 };
+    expect(playPostAnswerCard(value, 'duplicate#1').played).toBe(true);
+    const response = await cardEventHandler(new Request('https://example.test/api/solo/card-event', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: await seal(value), event: { type: 'veto-infeasible', effectId: value.activeEffects![0].id, reason: 'unsafe' } }),
+    }));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    const restored = await unseal<SecretSoloSession>(body.token, 'solo-session');
+    expect(restored.deck.hand).toEqual(['bird-guide#1', 'duplicate#2']);
+    expect(restored.activeEffects).toEqual([]);
+    expect(restored.lastCurseQuestionNumber).toBeUndefined();
+    expect(body.message).toContain('Duplicate did not use the normal card allowance');
+    expect(body.playedCardAnnouncements).toEqual([]);
+  });
+
   it('issues station and hiding-spot photos from separate panoramas with distinct cameras', async () => {
     const value = session();
     const askPhoto = async (category: string) => {
@@ -929,7 +1119,7 @@ describe('Solo token and card-session security', () => {
 
     const stationPhoto = await askPhoto('any-building-visible-from-station');
     const otherStationPhoto = await askPhoto('tallest-building-visible-from-station');
-    const spotPhoto = await askPhoto('a-tree');
+    const spotPhoto = await askPhoto('the-sky');
     expect(stationPhoto.asset.panoramaId).toBe('station-pano');
     expect(stationPhoto.body.displayText).toMatch(/at the central station/);
     expect(otherStationPhoto.asset.heading).not.toBe(stationPhoto.asset.heading);

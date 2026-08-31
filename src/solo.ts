@@ -23,21 +23,50 @@ export type SoloPhotoKind =
 
 export type AnySoloPhotoKind = SoloPhotoKind;
 
+export type SoloPhotoLocation = 'spot' | 'station' | 'zone' | 'static';
+
+export const SOLO_PHOTO_LOCATIONS: Record<SoloPhotoKind, SoloPhotoLocation> = {
+  'a-tree': 'zone',
+  'the-sky': 'spot',
+  you: 'static',
+  'widest-street': 'zone',
+  'tallest-structure-in-your-sightline': 'spot',
+  'any-building-visible-from-station': 'station',
+  'tallest-building-visible-from-station': 'station',
+  'trace-nearest-street-path': 'spot',
+  'two-buildings': 'zone',
+  'restaurant-interior': 'zone',
+  park: 'zone',
+  'grocery-store-aisle': 'zone',
+  'place-of-worship': 'zone',
+  'train-platform': 'zone',
+};
+
+export function soloPhotoLocationNote(kind: SoloPhotoKind) {
+  const notes: Record<SoloPhotoLocation, string> = {
+    spot: 'Location: Xeno’s current position (updated after a move).',
+    station: 'Location: the hiding zone’s central station, not Xeno’s current position.',
+    zone: 'Location: elsewhere inside the hiding zone, not Xeno’s current position. No hiding-location fallback.',
+    static: 'Location: none — a fixed Xeno selfie, not a location clue.',
+  };
+  return notes[SOLO_PHOTO_LOCATIONS[kind]] ?? 'Location: choose a supported Solo photo.';
+}
+
 export const SOLO_PHOTO_SUBJECTS: Array<{ id: SoloPhotoKind; label: string; help: string }> = [
-  { id: 'a-tree', label: 'A tree', help: 'Best effort: aims outdoor Street View into a mapped park in the hiding zone when possible, otherwise uses the hiding panorama.' },
+  { id: 'a-tree', label: 'A tree', help: 'Best effort: aims outdoor Street View into a park elsewhere in the hiding zone. The entire tree cannot be visually guaranteed.' },
   { id: 'the-sky', label: 'The sky', help: 'Supported: a deterministic view aimed straight up at the hiding location.' },
   { id: 'you', label: 'You', help: 'Easter egg: Xeno supplies a suspiciously anonymous selfie. Free to ask; no cards are drawn or kept.' },
-  { id: 'widest-street', label: 'Widest street', help: 'Approximate: a wide deterministic streetscape at the hiding location; Street View cannot prove it is the zone’s widest.' },
+  { id: 'widest-street', label: 'Widest street', help: 'Solo house rule: any other mapped street inside the hiding zone, away from Xeno’s current position. It need not be the widest street.' },
   { id: 'tallest-structure-in-your-sightline', label: 'Tallest structure in your sightline', help: 'Approximate: an upward-framed deterministic view at the hiding location.' },
   { id: 'any-building-visible-from-station', label: 'Any building visible from station', help: 'Rulebook-card approximation from the station panorama, framed upward to include a nearby building.' },
   { id: 'tallest-building-visible-from-station', label: 'Tallest building visible from station', help: 'Medium-game rulebook-card approximation from the station panorama, using a different view from the any-building card.' },
   { id: 'trace-nearest-street-path', label: 'Trace nearest street/path', help: 'Approximate: shows the precomputed orientation of the nearest named DataSF street, with north up. It does not trace intersections or cover every park and unnamed path.' },
-  { id: 'two-buildings', label: 'Two buildings', help: 'Medium-game rulebook-card approximation using a wide streetscape from the current hiding panorama.' },
-  { id: 'restaurant-interior', label: 'Restaurant interior', help: 'Best effort: searches the hiding zone for a restaurant and allows indoor Street View, falling back only when no usable scene exists.' },
-  { id: 'park', label: 'Park', help: 'Supported when the hiding zone contains a mapped qualifying park with nearby outdoor Street View.' },
-  { id: 'grocery-store-aisle', label: 'Grocery store aisle', help: 'Best effort: searches qualifying stores in the hiding zone and allows indoor Street View; the aisle framing cannot be guaranteed.' },
-  { id: 'place-of-worship', label: 'Place of worship', help: 'Best effort: searches qualifying worship sites in the hiding zone and aims available Street View at the place.' },
-  { id: 'train-platform', label: 'Train platform', help: 'Best effort: targets a mapped rail station in the hiding zone and allows indoor Street View for a platform or station scene.' },
+  { id: 'two-buildings', label: 'Two buildings', help: 'Best effort: a wide, horizon-level streetscape elsewhere in the hiding zone, separate from Xeno and the widest-street photo. The exact two-building framing cannot be guaranteed.' },
+  { id: 'restaurant-interior', label: 'Restaurant interior', help: 'Best effort: outdoor Street View aimed toward a restaurant elsewhere in the hiding zone, approximating the required through-window view.' },
+  { id: 'park', label: 'Park', help: 'Supported when a qualifying park elsewhere in the hiding zone has usable outdoor Street View away from Xeno’s current position.' },
+  { id: 'grocery-store-aisle', label: 'Grocery store aisle', help: 'Best effort: searches qualifying stores elsewhere in the hiding zone and allows indoor Street View; the aisle framing cannot be guaranteed.' },
+  { id: 'place-of-worship', label: 'Place of worship', help: 'Best effort: searches qualifying worship sites elsewhere in the hiding zone and aims available Street View at the place.' },
+  { id: 'train-platform', label: 'Train platform', help: 'Best effort: targets a mapped rail station elsewhere in the hiding zone and allows indoor Street View for a platform or station scene.' },
 ];
 
 export const soloPhotoOptionLabel = (subject: (typeof SOLO_PHOTO_SUBJECTS)[number]) =>
@@ -300,7 +329,7 @@ export function bearingDegrees(from: Position, to: Position) {
 }
 
 export type SoloPhotoPlan = {
-  source: 'spot' | 'station';
+  source: SoloPhotoLocation;
   displayText: string;
   heading: number;
   pitch: number;
@@ -326,8 +355,11 @@ export function soloPhotoPlan(
   const atStation = (displayText: string, heading: number, pitch: number, fov: number): SoloPhotoPlan => ({
     source: 'station', displayText, heading: normalizedHeading(heading), pitch, fov,
   });
+  const inZone = (displayText: string, heading: number, fov: number): SoloPhotoPlan => ({
+    source: 'zone', displayText, heading: normalizedHeading(heading), pitch: 0, fov,
+  });
   const unavailable = (reason: string, rewardEligible = false): SoloPhotoPlan => ({
-    source: 'spot', displayText: `I cannot answer: ${reason}`, heading: normalizedHeading(seededHeading), pitch: 0, fov: 90,
+    source: SOLO_PHOTO_LOCATIONS[kind], displayText: `I cannot answer: ${reason}`, heading: normalizedHeading(seededHeading), pitch: 0, fov: 90,
     unavailableReason: reason, rewardEligible,
   });
 
@@ -338,10 +370,10 @@ export function soloPhotoPlan(
     return atStation('Tallest building visible from station · Street View approximation at the central station', seededHeading + 180, 14, 75);
   }
   if (kind === 'widest-street') {
-    return atSpot('Widest street · Street View approximation at the hiding location', seededHeading + 90, 0, 120);
+    return inZone('Widest street · Solo house rule: another street elsewhere in the hiding zone, not necessarily the widest', seededHeading + 90, 120);
   }
   if (kind === 'a-tree') {
-    return atSpot('A tree · Street View approximation at the hiding location', seededHeading, 0, 75);
+    return inZone('A tree · best-effort park view elsewhere in the hiding zone', seededHeading, 75);
   }
   if (kind === 'tallest-structure-in-your-sightline') {
     return atSpot('Tallest structure in your sightline · Street View approximation at the hiding location', seededHeading + 180, 14, 75);
@@ -350,10 +382,10 @@ export function soloPhotoPlan(
     return atSpot('The sky · Street View at the hiding location', seededHeading, 90, 90);
   }
   if (kind === 'two-buildings') {
-    return atSpot('Two buildings · Street View approximation at the hiding location', seededHeading + 270, 0, 120);
+    return inZone('Two buildings · Street View framing approximation elsewhere in the hiding zone', seededHeading + 270, 120);
   }
   if (kind === 'you') return {
-    source: 'spot',
+    source: 'static',
     displayText: 'You · Xeno selfie (identity successfully concealed)',
     heading: normalizedHeading(seededHeading),
     pitch: 0,
@@ -364,11 +396,11 @@ export function soloPhotoPlan(
     ...atSpot('Trace nearest street/path · approximate nearest named-street orientation; north is up', seededHeading, 0, 90),
     generatedAsset: 'street-orientation',
   };
-  if (kind === 'restaurant-interior') return unavailable('no restaurant with usable Street View was found in this hiding zone');
-  if (kind === 'park') return unavailable('no qualifying mapped park with usable outdoor Street View was found in this hiding zone');
-  if (kind === 'grocery-store-aisle') return unavailable('no qualifying grocery store with usable Street View was found in this hiding zone');
-  if (kind === 'place-of-worship') return unavailable('no qualifying place of worship with usable Street View was found in this hiding zone');
-  if (kind === 'train-platform') return unavailable('no mapped rail station with usable Street View was found in this hiding zone');
+  if (kind === 'restaurant-interior') return inZone('Restaurant interior · best-effort through-window view elsewhere in the hiding zone', seededHeading, 100);
+  if (kind === 'park') return inZone('Park · outdoor Street View elsewhere in the hiding zone', seededHeading, 90);
+  if (kind === 'grocery-store-aisle') return inZone('Grocery-store aisle · best-effort view elsewhere in the hiding zone', seededHeading, 100);
+  if (kind === 'place-of-worship') return inZone('Place of worship · best-effort view elsewhere in the hiding zone', seededHeading, 100);
+  if (kind === 'train-platform') return inZone('Train platform · best-effort view elsewhere in the hiding zone', seededHeading, 100);
   return unavailable('Unsupported photo card');
 }
 

@@ -15,11 +15,30 @@ import type { SoloPublicCardState } from '../src/solo';
 import type { TransitScope } from '../src/types';
 import type { SecretSoloSession, SoloEffectState } from './_solo-session';
 import { chooseSoloHidingLocation } from './_solo-location';
+import { deterministicMazeSvg } from './_solo-maze';
+export { SOLO_MAZE_SIZE, deterministicMazeSvg } from './_solo-maze';
 
 declare const process: { env: Record<string, string | undefined> };
 
 export const GEMINI_CALL_LIMIT = 40;
 export const MAPS_CALL_LIMIT = 2;
+export const MOVE_QUESTION_THRESHOLD = 8;
+
+/** The sealed session lacks the full seekers' map; use search progress as a proxy. */
+export function moveTiming(session: SecretSoloSession) {
+  const questionsSinceRelocation = Math.max(0, session.questionNumber - (session.lastRelocationQuestionNumber ?? 0));
+  return {
+    basis: 'question-count' as const,
+    threshold: MOVE_QUESTION_THRESHOLD,
+    questionsSinceRelocation,
+    ready: session.phase === 'seeking' && !session.pausedAt && questionsSinceRelocation >= MOVE_QUESTION_THRESHOLD,
+  };
+}
+
+export function preferredMovePlay(session: SecretSoloSession) {
+  if (!moveTiming(session).ready) return undefined;
+  return session.deck.hand.find((instance) => cardIdFromInstance(instance) === 'move');
+}
 
 export const SPOTTY_MEMORY_CATEGORIES = ['radar', 'thermometer', 'measuring', 'matching-region', 'photo-reference', 'tentacle'] as const;
 
@@ -61,6 +80,7 @@ export function initializeCardSession(session: Omit<SecretSoloSession, 'deck' | 
     version: 2,
     deck: createDeck(cryptoRandom),
     questionNumber: 0,
+    lastRelocationQuestionNumber: 0,
     activeEffects: [],
     blockedQuestionKeys: [],
     bonusMinutes: 0,
@@ -111,7 +131,7 @@ export function publicCardState(session: SecretSoloSession): SoloPublicCardState
     citationUrl: effect.citationUrl,
     placeName: effect.placeName,
     placePosition: effect.proposedPosition,
-    mazeSvg: effect.mazeSvg,
+    mazeSvg: effect.cardId === 'labyrinth' && effect.mazeSeed ? deterministicMazeSvg(effect.mazeSeed) : effect.mazeSvg,
     hangmanPattern: effect.hangmanWord
       ? effect.hangmanWord.split('').map((letter) => effect.hangmanGuesses?.includes(letter) ? letter : '_').join(' ')
       : undefined,
@@ -275,6 +295,15 @@ export function responseCardCanActAs(session: SecretSoloSession, instance: CardI
   return id === action || (id === 'duplicate' && session.deck.hand.some((candidate) => cardIdFromInstance(candidate) === action));
 }
 
+export function preferredResponseCard(session: SecretSoloSession, cards: CardInstanceId[], action: 'veto' | 'randomize') {
+  const options = cards.filter((instance) => session.deck.hand.includes(instance) && responseCardCanActAs(session, instance, action));
+  const original = options.find((instance) => cardIdFromInstance(instance) === action);
+  if (original && session.phase === 'end-game' && session.deck.hand.some((instance) =>
+    cardForInstance(instance).kind === 'time-bonus' && (cardForInstance(instance).smallMinutes ?? 0) >= 8)) return original;
+  // Spend the copy first so the original remains a target for any other Duplicate.
+  return options.find((instance) => cardIdFromInstance(instance) === 'duplicate') ?? options[0];
+}
+
 export function playResponseCard(session: SecretSoloSession, instance: CardInstanceId, action: 'veto' | 'randomize', announcement?: string) {
   if (!legalResponseCards(session).includes(instance) || !responseCardCanActAs(session, instance, action)) return false;
   const duplicateNote = cardIdFromInstance(instance) === 'duplicate' ? `Duplicate another card as ${CARD_CATALOG[action].name}` : CARD_CATALOG[action].name;
@@ -283,7 +312,7 @@ export function playResponseCard(session: SecretSoloSession, instance: CardInsta
   return true;
 }
 
-function legalDirectPostAnswerCards(session: SecretSoloSession) {
+function legalDirectPostAnswerCards(session: SecretSoloSession, copying = false) {
   reconcileCardEffects(session);
   const blockingCurse = (session.activeEffects ?? []).some((effect) => effect.blocksQuestions || effect.blocksTransit);
   return session.deck.hand.filter((instance) => {
@@ -294,7 +323,9 @@ function legalDirectPostAnswerCards(session: SecretSoloSession) {
     if (!card.aiPlayable || !canPayCastingCost(session.deck, instance)) return false;
     if (session.phase === 'end-game' && card.endgameAllowed === false) return false;
     if (card.kind === 'curse') {
-      if (!curseCadenceAllows(session)) return false;
+      // A copy of an already-active persistent restriction adds no new obstacle.
+      if (session.activeEffects?.some((effect) => effect.cardId === card.id)) return false;
+      if (!copying && !curseCadenceAllows(session)) return false;
       if (blockingCurse && (card.blocksQuestions || card.blocksTransit)) return false;
       if (card.id === 'bridge-troll' && (!session.lastSeekerPosition || positionDistanceMeters(session.lastSeekerPosition, session.spot) < 5 * 1609.344)) return false;
       if ((card.id === 'u-turn' || card.id === 'mediocre-travel-agent') &&
@@ -302,15 +333,45 @@ function legalDirectPostAnswerCards(session: SecretSoloSession) {
       if (card.id === 'u-turn' && !session.lastTransitRoute) return false;
       if (card.id === 'mediocre-travel-agent' && session.lastTransitRoute) return false;
     }
-    return card.id !== 'move' || session.phase !== 'end-game';
+    // This AI timing policy applies to both Move and a Duplicate copying Move.
+    return card.id !== 'move' || moveTiming(session).ready;
   });
 }
 
 export function duplicatePostAnswerTarget(session: SecretSoloSession, duplicate: CardInstanceId) {
   if (cardIdFromInstance(duplicate) !== 'duplicate') return undefined;
-  return legalDirectPostAnswerCards(session)
-    .filter((instance) => instance !== duplicate)
+  return legalDirectPostAnswerCards(session, true)
+    .filter((instance) => instance !== duplicate && canPayCastingCostForCard(session.deck, duplicate, cardForInstance(instance)))
     .sort((a, b) => fallbackCardRank(b) - fallbackCardRank(a))[0];
+}
+
+export function preferredPostAnswerCard(session: SecretSoloSession, instance: CardInstanceId) {
+  const card = cardForInstance(instance);
+  // These discard the whole hand anyway; copying them cannot preserve the original.
+  if (card.id === 'duplicate' || card.id === 'move' || card.id === 'drained-brain') return instance;
+  const reserveRank = Math.max(0, ...session.deck.hand
+    .filter((candidate) => {
+      const held = cardForInstance(candidate);
+      return held.kind === 'time-bonus' || held.id === 'veto' || held.id === 'randomize';
+    }).map(fallbackCardRank));
+  // Keep the copy for a stronger response card or premium round-end bonus.
+  if (reserveRank > fallbackCardRank(instance)) return instance;
+  return session.deck.hand.find((candidate) => cardIdFromInstance(candidate) === 'duplicate' &&
+    duplicatePostAnswerTarget(session, candidate) === instance) ?? instance;
+}
+
+/** Free copies are considered even after the normal question play is spent. */
+export function preferredDuplicatePlay(session: SecretSoloSession) {
+  return session.deck.hand
+    .filter((instance) => cardIdFromInstance(instance) === 'duplicate')
+    .find((instance) => {
+      const target = duplicatePostAnswerTarget(session, instance);
+      if (!target) return false;
+      const card = cardForInstance(target);
+      // Avoid speculative casting or discarding the whole hand just to use a copy.
+      if (card.uncertainCasting || card.id === 'move' || card.id === 'drained-brain') return false;
+      return preferredPostAnswerCard(session, target) === instance;
+    });
 }
 
 export function effectiveCardIdForPlay(session: SecretSoloSession, instance: CardInstanceId): CardId {
@@ -331,38 +392,6 @@ function hangmanWord(session: SecretSoloSession) {
   return HANGMAN_WORDS[seed % HANGMAN_WORDS.length];
 }
 
-export const SOLO_MAZE_SIZE = 41;
-
-export function deterministicMazeSvg(seedText: string) {
-  const size = SOLO_MAZE_SIZE;
-  let seed = [...seedText].reduce((value, character) => (value * 33 + character.charCodeAt(0)) >>> 0, 2166136261);
-  const random = () => { seed = (1664525 * seed + 1013904223) >>> 0; return seed / 0x1_0000_0000; };
-  const visited = Array.from({ length: size }, () => Array(size).fill(false));
-  const openings = new Set<string>();
-  const stack: Array<[number, number]> = [[0, 0]];
-  visited[0][0] = true;
-  while (stack.length) {
-    const [x, y] = stack[stack.length - 1];
-    const neighbors = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]
-      .filter(([nx, ny]) => nx >= 0 && nx < size && ny >= 0 && ny < size && !visited[ny][nx]);
-    if (!neighbors.length) { stack.pop(); continue; }
-    const [nx, ny] = neighbors[Math.floor(random() * neighbors.length)];
-    openings.add(`${x},${y}:${nx},${ny}`);
-    openings.add(`${nx},${ny}:${x},${y}`);
-    visited[ny][nx] = true;
-    stack.push([nx, ny]);
-  }
-  const cell = 10;
-  const lines: string[] = [];
-  for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
-    if (y === 0 && x !== 0) lines.push(`<path d="M${x * cell} ${y * cell}h${cell}"/>`);
-    if (x === 0) lines.push(`<path d="M${x * cell} ${y * cell}v${cell}"/>`);
-    if (!openings.has(`${x},${y}:${x + 1},${y}`)) lines.push(`<path d="M${(x + 1) * cell} ${y * cell}v${cell}"/>`);
-    if (!openings.has(`${x},${y}:${x},${y + 1}`) && !(y === size - 1 && x === size - 1)) lines.push(`<path d="M${x * cell} ${(y + 1) * cell}h${cell}"/>`);
-  }
-  const extent = size * cell;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${extent}" height="${extent}" viewBox="0 0 ${extent} ${extent}" role="img" aria-label="Challenging ${size} by ${size} solvable maze"><rect width="100%" height="100%" fill="white"/><g fill="none" stroke="#17222d" stroke-width="1.4">${lines.join('')}</g><text x="2" y="9" font-size="7" font-weight="700">START</text><text x="${extent - 19}" y="${extent - 3}" font-size="7" font-weight="700">END</text></svg>`;
-}
 
 function randomizedSoloCurseDetail(cardId: CardId, random: () => number) {
   const choose = <T,>(options: T[]) => options[Math.min(options.length - 1, Math.max(0, Math.floor(random() * options.length)))];
@@ -398,7 +427,7 @@ function createCurseEffect(session: SecretSoloSession, instance: CardInstanceId,
     completionInstruction: card.completionInstruction,
     failureInstruction: card.failureInstruction,
     detail: randomizedSoloCurseDetail(card.id, random),
-    mazeSvg: card.id === 'labyrinth' ? deterministicMazeSvg(`${session.sessionId}:${session.questionNumber}`) : undefined,
+    mazeSeed: card.id === 'labyrinth' ? `${session.sessionId}:${session.questionNumber}` : undefined,
     hangmanWord: card.id === 'hidden-hangman' ? hangmanWord(session) : undefined,
     hangmanWrong: card.id === 'hidden-hangman' ? [] : undefined,
     hangmanGuesses: card.id === 'hidden-hangman' ? [] : undefined,
@@ -439,6 +468,7 @@ export async function playMoveCard(
   session.stationPanorama = { id: chosen.stationPanorama.id, date: chosen.stationPanorama.date };
   session.route = chosen.route;
   session.positionRevision = (session.positionRevision ?? 0) + 1;
+  session.lastRelocationQuestionNumber = session.questionNumber;
   session.publicMoves = [...(session.publicMoves ?? []), {
     at: movedAt.toISOString(), oldStation,
   }];
@@ -488,7 +518,7 @@ export function playPostAnswerCard(session: SecretSoloSession, instance: CardIns
     return { played: true, announcement: privateHandManagement ? undefined : announcement };
   }
 
-  session.lastCurseQuestionNumber = session.questionNumber;
+  if (!copiedTarget) session.lastCurseQuestionNumber = session.questionNumber;
   let castingRoll: number | undefined;
   if (card.id === 'endless-tumble' || card.id === 'gamblers-feet') {
     castingRoll = 1 + Math.floor(random() * 6);
@@ -546,16 +576,31 @@ export function enforceKeepPriorities(drawn: CardInstanceId[], requested: CardIn
     if (chosen.length >= slots) break;
     if (!chosen.includes(instance)) chosen.push(instance);
   }
+  // Model discretion must not turn a small bonus into a higher priority than
+  // useful power-ups/curses. Keep the stronger bonus when no useful alternative exists.
+  for (let index = 0; index < chosen.length; index += 1) {
+    const card = cardForInstance(chosen[index]);
+    if (card.kind !== 'time-bonus' || (card.smallMinutes ?? 0) > 6) continue;
+    const replacement = fallbackKeep(drawn, drawn.length).find((instance) =>
+      !chosen.includes(instance) &&
+      fallbackCardRank(instance) > fallbackCardRank(chosen[index]));
+    if (replacement) chosen[index] = replacement;
+  }
   return chosen;
 }
 
 export function fallbackPlay(session: SecretSoloSession) {
-  const options = legalPostAnswerCards(session).sort((a, b) => fallbackCardRank(b) - fallbackCardRank(a));
+  const options = legalDirectPostAnswerCards(session).sort((a, b) => fallbackCardRank(b) - fallbackCardRank(a));
   const immediatelyUseful = options.find((instance) => {
     const card = cardForInstance(instance);
+    if (card.id === 'drained-brain') {
+      const others = session.deck.hand.filter((candidate) => candidate !== instance);
+      if (handTimeBonusMinutes(session.deck) >= 8 || others.some((candidate) => fallbackCardRank(candidate) >= 820)) return false;
+    }
+    // Unattended fallback casting remains conservative; this is not a keep-value penalty.
     return card.kind === 'powerup' || (card.kind === 'curse' && !card.uncertainCasting);
   });
-  return immediatelyUseful;
+  return immediatelyUseful ? preferredPostAnswerCard(session, immediatelyUseful) : undefined;
 }
 
 export function preferredEarlyPowerupPlay(session: SecretSoloSession) {
@@ -565,9 +610,10 @@ export function preferredEarlyPowerupPlay(session: SecretSoloSession) {
     ['discard-2-draw-3', 2],
     ['expand-hand', 1],
   ]);
-  return legalPostAnswerCards(session)
+  const selected = legalDirectPostAnswerCards(session)
     .filter((instance) => priority.has(cardIdFromInstance(instance)))
     .sort((a, b) => (priority.get(cardIdFromInstance(b)) ?? 0) - (priority.get(cardIdFromInstance(a)) ?? 0))[0];
+  return selected ? preferredPostAnswerCard(session, selected) : undefined;
 }
 
 export function finalTimeBonusMinutes(session: SecretSoloSession) {

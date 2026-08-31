@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CARD_CATALOG, UNPLAYABLE_AI_CURSES, cardIdFromInstance, createDeck, deckCatalogCount, drawReward, enforceHandLimit, type CardInstanceId } from './cards';
-import { GEMINI_BUDGET_CONSTANTS, chooseCardStrategy, groundedPlace } from '../api/_solo-gemini';
-import { SOLO_MAZE_SIZE, SPOTTY_MEMORY_CATEGORIES, advancePersistentEffects, curseCadenceAllows, deterministicMazeSvg, enforceKeepPriorities, fallbackKeep, finalTimeBonusMinutes, legalPostAnswerCards, legalResponseCards, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardState } from '../api/_solo-cards';
+import { CARD_CATALOG, UNPLAYABLE_AI_CURSES, cardIdFromInstance, createDeck, deckCatalogCount, drawReward, enforceHandLimit, fallbackCardRank, type CardInstanceId } from './cards';
+import { GEMINI_BUDGET_CONSTANTS, chooseCardStrategy, chooseResponseStrategy, groundedPlace } from '../api/_solo-gemini';
+import { MOVE_QUESTION_THRESHOLD, SOLO_MAZE_SIZE, SPOTTY_MEMORY_CATEGORIES, advancePersistentEffects, curseCadenceAllows, deterministicMazeSvg, duplicatePostAnswerTarget, enforceKeepPriorities, fallbackKeep, fallbackPlay, finalTimeBonusMinutes, legalPostAnswerCards, legalResponseCards, moveTiming, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, preferredMovePlay, preferredResponseCard, prepareQuestionReward, publicCardState } from '../api/_solo-cards';
 import type { SecretSoloSession } from '../api/_solo-session';
 import type { Constraint } from './types';
+import { playSoloCards } from '../api/_solo-play';
 
 function sessionWithHand(hand: CardInstanceId[], questionNumber = 1): SecretSoloSession {
   const now = new Date();
@@ -36,6 +37,44 @@ describe('official Xeno hider deck', () => {
       return [card.smallMinutes, card.count];
     })).toEqual([[2, 25], [4, 15], [6, 10], [8, 3], [12, 2]]);
   });
+
+  it('documents the actual curse tiers relative to time-bonus keep priorities', () => {
+    for (const card of Object.values(CARD_CATALOG).filter((card) => card.kind === 'curse')) {
+      const rank = fallbackCardRank(`${card.id}#1`);
+      const outranks = [2, 4, 6, 8, 12].filter((minutes) => rank > fallbackCardRank(`time-${minutes}#1` as CardInstanceId));
+      expect(outranks, card.name).toEqual(!card.aiPlayable ? [] : card.id === 'u-turn' ? [2] : [2, 4, 6]);
+      expect(rank, card.name).toBe(!card.aiPlayable ? 0 : card.id === 'u-turn' ? 250 : 900);
+    }
+  });
+
+  it('only lowers supported curses with a concrete AI-handling limitation', () => {
+    expect(Object.values(CARD_CATALOG).filter((card) => card.aiAwkwardReason).map((card) => card.id)).toEqual(['u-turn']);
+    expect(CARD_CATALOG['u-turn'].aiAwkwardReason).toMatch(/live travel direction, next-stop, and connecting-service/);
+    const standard = Object.values(CARD_CATALOG).filter((card) => card.kind === 'curse' && fallbackCardRank(`${card.id}#1`) === 900);
+    expect(standard).toHaveLength(21);
+  });
+
+  it('ties Drained Brain with ordinary curses without overriding another tied model choice', () => {
+    expect(fallbackCardRank('drained-brain#1')).toBe(fallbackCardRank('spotty-memory#1'));
+    expect(fallbackKeep(['urban-explorer#1', 'drained-brain#1'], 1)).toEqual(['urban-explorer#1']);
+    expect(enforceKeepPriorities(['drained-brain#1', 'urban-explorer#1'], ['urban-explorer#1'], 1)).toEqual(['urban-explorer#1']);
+  });
+
+  it.each(['bridge-troll', 'distant-cuisine', 'mediocre-travel-agent', 'unguided-tourist', 'water-weight'] as const)(
+    'keeps %s above small bonuses without removing its casting-confirmation requirement', (id) => {
+      const instance = `${id}#1` as const;
+      expect(CARD_CATALOG[id].uncertainCasting).toBe(true);
+      for (const minutes of [2, 4, 6]) {
+        const time = `time-${minutes}#1` as CardInstanceId;
+        expect(fallbackKeep([time, instance], 1)).toEqual([instance]);
+        expect(enforceKeepPriorities([time, instance], [time], 1)).toEqual([instance]);
+      }
+      const session = sessionWithHand([instance, 'time-2#1', 'time-4#1', 'time-6#1', 'time-8#1', 'time-12#1', 'veto#1']);
+      session.deck.maxHandSize = 4;
+      expect(enforceHandLimit(session.deck)).toEqual(['time-2#1', 'time-4#1', 'time-6#1']);
+      expect(session.deck.hand).toContain(instance);
+    },
+  );
 
   it('keeps only Cairn and Ransom Note unplayable and in the shuffled deck', () => {
     expect([...UNPLAYABLE_AI_CURSES].sort()).toEqual(['cairn', 'ransom-note']);
@@ -75,6 +114,33 @@ describe('official Xeno hider deck', () => {
     };
     expect(enforceHandLimit(deck)).toEqual(['time-2#1']);
     expect(deck.hand.map(cardIdFromInstance)).toEqual(['veto', 'randomize']);
+  });
+
+  it('corrects the logged Drained Brain and Lemon Phylactery draws over 2-minute bonuses', () => {
+    const brain: CardInstanceId[] = ['drained-brain#1', 'time-2#1', 'urban-explorer#1'];
+    const lemon: CardInstanceId[] = ['time-2#1', 'lemon-phylactery#1'];
+    for (const drawn of [brain, lemon]) {
+      expect(fallbackKeep(drawn, 1, 9)).toEqual([drawn === brain ? 'drained-brain#1' : 'lemon-phylactery#1']);
+      expect(enforceKeepPriorities(drawn, ['time-2#1'], 1)).toEqual(fallbackKeep(drawn, 1, 9));
+    }
+    expect(enforceKeepPriorities(['time-2#1', 'time-6#1'], ['time-2#1'], 1)).toEqual(['time-6#1']);
+    expect(fallbackKeep(['cairn#1', 'time-2#1'], 1)).toEqual(['time-2#1']);
+  });
+
+  it('keeps Duplicate and Drained Brain instead of low bonuses on overflow', () => {
+    const session = sessionWithHand(['time-8#1', 'time-6#1', 'time-6#2', 'time-6#3', 'duplicate#1', 'time-2#1', 'drained-brain#1'], 9);
+    expect(enforceHandLimit(session.deck)).toEqual(['time-2#1']);
+    expect(session.deck.hand).toContain('duplicate#1');
+    expect(session.deck.hand).toContain('drained-brain#1');
+    expect(fallbackKeep(['duplicate#1', 'time-6#1'], 1)).toEqual(['duplicate#1']);
+    expect(enforceKeepPriorities(['duplicate#1', 'time-6#1'], ['time-6#1'], 1)).toEqual(['duplicate#1']);
+  });
+
+  it('uses small bonuses before Duplicate or useful curses to pay casting costs', () => {
+    const session = sessionWithHand(['spotty-memory#1', 'time-8#1', 'time-2#1', 'duplicate#1']);
+    expect(playPostAnswerCard(session, 'spotty-memory#1').played).toBe(true);
+    expect(session.deck.discardPile).toEqual(['time-2#1']);
+    expect(session.deck.hand).toEqual(['time-8#1', 'duplicate#1']);
   });
 
   it('ranks response cards and immediately playable curses above 4-minute bonuses', () => {
@@ -227,6 +293,122 @@ describe('official Xeno hider deck', () => {
     expect(session.deck.maxHandSize).toBe(7);
   });
 
+  it('selects Duplicate before an expansion source in both early and fallback play', () => {
+    const session = sessionWithHand(['expand-hand#1', 'time-2#1', 'duplicate#1'], 3);
+    expect(preferredEarlyPowerupPlay(session)).toBe('duplicate#1');
+    expect(fallbackPlay(session)).toBe('duplicate#1');
+  });
+
+  it('marks Duplicate as an anytime play exempt from the per-question allowance', () => {
+    expect(CARD_CATALOG.duplicate.timing).toBe('any-time');
+    expect(CARD_CATALOG.duplicate.description).toContain('Does not count toward the one-card-per-question limit');
+  });
+
+  it('plays two free Duplicates and the original expansion in the same question', async () => {
+    const session = sessionWithHand(['expand-hand#1', 'duplicate#1', 'duplicate#2', 'time-2#1'], 3);
+    session.deck.drawPile = ['time-2#2', 'time-2#3', 'time-2#4'];
+    const announcements = await playSoloCards(session, { selected: 'duplicate#1' });
+    expect(session.deck.usedPile).toEqual(['duplicate#1', 'duplicate#2', 'expand-hand#1']);
+    expect(session.deck.maxHandSize).toBe(9);
+    expect(session.deck.hand).toEqual(['time-2#1', 'time-2#2', 'time-2#3', 'time-2#4']);
+    expect(announcements).toHaveLength(3);
+    expect(announcements.slice(0, 2).every((text) => text.includes('Duplicate another card'))).toBe(true);
+  });
+
+  it('plays a newly drawn Duplicate after the ordinary card, but not another ordinary card', async () => {
+    const session = sessionWithHand(['expand-hand#1', 'bird-guide#1'], 3);
+    session.deck.drawPile = ['duplicate#1'];
+    await playSoloCards(session, { selected: 'expand-hand#1' });
+    expect(session.deck.usedPile).toEqual(['expand-hand#1', 'duplicate#1']);
+    expect(session.deck.hand).toEqual(['bird-guide#1']);
+    expect(session.activeEffects).toEqual([expect.objectContaining({ cardId: 'bird-guide', cardInstance: 'duplicate#1' })]);
+    expect(session.lastCurseQuestionNumber).toBeUndefined();
+  });
+
+  it('can play Duplicate independently when the normal allowance is unavailable or unused', async () => {
+    for (const options of [{ allowNormal: false, selected: 'expand-hand#1' as const }, {}]) {
+      const session = sessionWithHand(['expand-hand#1', 'duplicate#1']);
+      await playSoloCards(session, options);
+      expect(session.deck.usedPile).toEqual(['duplicate#1']);
+      expect(session.deck.hand).toEqual(['expand-hand#1']);
+      expect(session.deck.maxHandSize).toBe(7);
+    }
+  });
+
+  it('allows a copied curse during normal curse cooldown without advancing it', async () => {
+    const session = sessionWithHand(['duplicate#1', 'bird-guide#1', 'discard-1-draw-2#1', 'time-2#1'], 2);
+    session.lastCurseQuestionNumber = 1;
+    expect(legalPostAnswerCards(session)).not.toContain('bird-guide#1');
+    expect(legalPostAnswerCards(session)).toContain('duplicate#1');
+    await playSoloCards(session, { selected: 'discard-1-draw-2#1' });
+    expect(session.deck.usedPile).toEqual(['duplicate#1', 'discard-1-draw-2#1']);
+    expect(session.lastCurseQuestionNumber).toBe(1);
+    expect(session.deck.discardPile).toEqual(['time-2#1']);
+  });
+
+  it('does not charge a failed Duplicate curse attempt to the normal curse allowance', () => {
+    const session = sessionWithHand(['duplicate#1', 'endless-tumble#1'], 3);
+    session.lastCurseQuestionNumber = 1;
+    expect(playPostAnswerCard(session, 'duplicate#1', () => 0.99)).toMatchObject({ played: true, noEffect: true });
+    expect(session.lastCurseQuestionNumber).toBe(1);
+    expect(legalPostAnswerCards(session)).toContain('endless-tumble#1');
+  });
+
+  it('keeps a Duplicate plus ordinary hand-cycling sequence private', async () => {
+    const session = sessionWithHand(['duplicate#1', 'discard-1-draw-2#1', 'time-2#1'], 3);
+    session.deck.drawPile = ['time-2#2', 'time-2#3', 'time-2#4', 'time-2#5'];
+    expect(await playSoloCards(session, { selected: 'discard-1-draw-2#1' })).toEqual([]);
+    expect(session.deck.usedPile).toEqual(['duplicate#1', 'discard-1-draw-2#1']);
+    expect(session.recentDecisions).toHaveLength(2);
+    expect(session.recentDecisions?.every((decision) => decision.startsWith('[private]'))).toBe(true);
+    expect(publicCardState(session).playHistory).toEqual([]);
+  });
+
+  it('does not use anytime copies in paused or completed games', async () => {
+    for (const state of [{ pausedAt: new Date().toISOString() }, { phase: 'found' as const }, { phase: 'gave-up' as const }]) {
+      const session = Object.assign(sessionWithHand(['expand-hand#1', 'duplicate#1']), state);
+      expect(await playSoloCards(session, { selected: 'expand-hand#1' })).toEqual([]);
+      expect(session.deck.usedPile).toEqual([]);
+    }
+  });
+
+  it('preserves Duplicate for response cards or premium endgame scoring instead of a weaker copy', () => {
+    for (const reserved of ['veto#1', 'randomize#1', 'time-12#1'] as CardInstanceId[]) {
+      const session = sessionWithHand(['expand-hand#1', 'duplicate#1', reserved], 9);
+      expect(fallbackPlay(session)).toBe('expand-hand#1');
+      playPostAnswerCard(session, 'expand-hand#1');
+      expect(session.deck.hand).toContain('duplicate#1');
+    }
+    const endgame = sessionWithHand(['time-12#1', 'duplicate#1', 'duplicate#2'], 15);
+    endgame.phase = 'end-game';
+    expect(fallbackPlay(endgame)).toBeUndefined();
+    expect(finalTimeBonusMinutes(endgame)).toBe(36);
+  });
+
+  it('does not copy an already-active permanent curse', () => {
+    const session = sessionWithHand(['spotty-memory#1', 'duplicate#1', 'time-2#1', 'time-2#2']);
+    expect(playPostAnswerCard(session, 'duplicate#1').played).toBe(true);
+    expect(session.deck.hand).toContain('spotty-memory#1');
+    session.questionNumber = 3;
+    expect(legalPostAnswerCards(session)).not.toContain('spotty-memory#1');
+    expect(session.activeEffects).toHaveLength(1);
+  });
+
+  it('checks casting costs for the Duplicate instance, not only the source', () => {
+    const session = sessionWithHand(['lemon-phylactery#1', 'duplicate#1']);
+    expect(legalPostAnswerCards(session)).toContain('lemon-phylactery#1');
+    expect(duplicatePostAnswerTarget(session, 'duplicate#1')).toBeUndefined();
+    expect(playPostAnswerCard(session, 'duplicate#1').played).toBe(false);
+    expect(session.deck.usedPile).toEqual([]);
+  });
+
+  it('retains Drained Brain instead of automatically discarding a valuable hand to cast it', () => {
+    const valuable = sessionWithHand(['drained-brain#1', 'time-8#1', 'duplicate#1'], 9);
+    expect(fallbackPlay(valuable)).toBeUndefined();
+    const expendable = sessionWithHand(['drained-brain#1', 'time-2#1'], 9);
+    expect(fallbackPlay(expendable)).toBe('drained-brain#1');
+  });
+
   it('plays Duplicate as Veto or Randomize only when the copied response card is held', () => {
     const session = sessionWithHand(['duplicate#1', 'veto#1']);
     expect(legalResponseCards(session)).toEqual(expect.arrayContaining(['duplicate#1', 'veto#1']));
@@ -238,8 +420,17 @@ describe('official Xeno hider deck', () => {
     expect(legalResponseCards(withoutTarget)).not.toContain('duplicate#2');
   });
 
+  it('spends the original response card in the endgame when Duplicate can score a premium bonus', () => {
+    const session = sessionWithHand(['veto#1', 'duplicate#1', 'time-12#1'], 15);
+    session.phase = 'end-game';
+    const selected = preferredResponseCard(session, legalResponseCards(session), 'veto');
+    expect(selected).toBe('veto#1');
+    expect(playResponseCard(session, selected!, 'veto')).toBe(true);
+    expect(finalTimeBonusMinutes(session)).toBe(24);
+  });
+
   it('reveals a usable old-station pin and resets movement state when Move succeeds', async () => {
-    const session = sessionWithHand(['move#1', 'time-12#1', 'cairn#1']);
+    const session = sessionWithHand(['move#1', 'time-12#1', 'cairn#1'], MOVE_QUESTION_THRESHOLD);
     session.transitScope = 'primary';
     const previousSpot = session.spot;
     const nextSpot = { lat: 37.75, lng: -122.45 };
@@ -256,9 +447,61 @@ describe('official Xeno hider deck', () => {
     expect(session.recentDecisions?.at(-1)).toMatch(/discarded.*12-minute time bonus.*Curse of the Cairn/i);
     expect(session.deck.hand).toEqual([]);
     expect(session.positionRevision).toBe(1);
+    expect(session.lastRelocationQuestionNumber).toBe(MOVE_QUESTION_THRESHOLD);
     expect(publicCardState(session).moves[0]).toEqual(expect.objectContaining({
       oldStation: expect.objectContaining({ name: 'Test Station', position: { lat: 37.78, lng: -122.42 } }),
     }));
+  });
+
+  it('holds Move through question seven and prioritizes it from question eight', () => {
+    const session = sessionWithHand(['move#1', 'time-12#1'], MOVE_QUESTION_THRESHOLD - 1);
+    expect(fallbackKeep(['move#1', 'time-12#1'], 1)).toEqual(['move#1']);
+    expect(legalPostAnswerCards(session)).not.toContain('move#1');
+    expect(fallbackPlay(session)).toBeUndefined();
+    expect(moveTiming(session)).toMatchObject({ ready: false, threshold: 8, questionsSinceRelocation: 7 });
+    session.questionNumber = MOVE_QUESTION_THRESHOLD;
+    expect(preferredMovePlay(session)).toBe('move#1');
+    expect(fallbackPlay(session)).toBe('move#1');
+  });
+
+  it('does not let Duplicate or a direct Move call bypass the timing gate', async () => {
+    const session = sessionWithHand(['move#1', 'duplicate#1'], MOVE_QUESTION_THRESHOLD - 1);
+    const chooseLocation = vi.fn(async () => undefined);
+    expect(duplicatePostAnswerTarget(session, 'duplicate#1')).toBeUndefined();
+    expect(await playMoveCard(session, 'move#1', chooseLocation)).toEqual({ played: false });
+    expect(await playMoveCard(session, 'duplicate#1', chooseLocation)).toEqual({ played: false });
+    expect(chooseLocation).not.toHaveBeenCalled();
+    expect(session.deck.hand).toEqual(['move#1', 'duplicate#1']);
+    session.questionNumber = MOVE_QUESTION_THRESHOLD;
+    expect(duplicatePostAnswerTarget(session, 'duplicate#1')).toBe('move#1');
+  });
+
+  it('starts the eight-question count again after relocation', () => {
+    const session = sessionWithHand(['move#1'], 14);
+    session.lastRelocationQuestionNumber = 10;
+    expect(moveTiming(session)).toMatchObject({ ready: false, questionsSinceRelocation: 4 });
+    expect(preferredMovePlay(session)).toBeUndefined();
+    session.questionNumber = 18;
+    expect(preferredMovePlay(session)).toBe('move#1');
+  });
+
+  it.each(['end-game', 'found', 'gave-up'] as const)('never moves in %s even after the threshold', async (phase) => {
+    const session = sessionWithHand(['move#1', 'duplicate#1'], 20);
+    session.phase = phase;
+    const chooseLocation = vi.fn(async () => undefined);
+    expect(preferredMovePlay(session)).toBeUndefined();
+    expect(legalPostAnswerCards(session)).not.toContain('move#1');
+    expect(await playMoveCard(session, 'move#1', chooseLocation)).toEqual({ played: false });
+    expect(chooseLocation).not.toHaveBeenCalled();
+  });
+
+  it('keeps the hand and progress baseline intact if no Move destination is available', async () => {
+    const session = sessionWithHand(['move#1', 'time-12#1'], 12);
+    session.lastRelocationQuestionNumber = 2;
+    expect(await playMoveCard(session, 'move#1', vi.fn(async () => undefined))).toEqual({ played: false });
+    expect(session.lastRelocationQuestionNumber).toBe(2);
+    expect(session.deck.hand).toEqual(['move#1', 'time-12#1']);
+    expect(session.positionRevision).toBeUndefined();
   });
 
   it('applies Overflowing Chalice only to the next three questions that actually draw rewards', () => {
@@ -384,6 +627,28 @@ describe('Gemini hard budget', () => {
     expect(place?.citationUrl).not.toMatch(/Golden.Gate.Park/i);
   });
 
+  it('grounds Distant Cuisine as a reference without requesting Street View or moving Xeno', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ name: 'Reference Restaurant', country: 'Peru', lat: 37.7805, lng: -122.42, citationUrl: 'https://example.test/restaurant' }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const session = strategySession();
+    session.deck.hand = ['distant-cuisine#1'];
+    const originalSpot = structuredClone(session.spot);
+    const originalPanorama = structuredClone(session.panorama);
+    await playSoloCards(session, { selected: 'distant-cuisine#1' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.every(([url]) => String(url).includes('generativelanguage.googleapis.com'))).toBe(true);
+    expect(session.spot).toEqual(originalSpot);
+    expect(session.panorama).toEqual(originalPanorama);
+    expect(session.activeEffects?.[0]).toMatchObject({
+      cardId: 'distant-cuisine', status: 'pending', placeName: 'Reference Restaurant',
+      proposedPosition: { lat: 37.7805, lng: -122.42 }, detail: expect.stringContaining('Xeno has not moved'),
+    });
+    expect(session.activeEffects?.[0].proposedPanorama).toBeUndefined();
+  });
+
   it('lets Gemini play a card it keeps from the current draw', async () => {
     process.env.GEMINI_API_KEY = 'test-key';
     const fetchMock = vi.fn()
@@ -400,6 +665,128 @@ describe('Gemini hard budget', () => {
     const prompt = String(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).input);
     expect(prompt).toContain('discard-1-draw-2#1');
     expect(prompt).toContain('newly drawn card may be played immediately');
+  });
+
+  it('overrides Gemini choosing the logged 2-minute bonus over Drained Brain', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ keeps: [['time-2#1']], playCard: null }) })));
+    const session = strategySession();
+    session.questionNumber = 9;
+    const result = await chooseCardStrategy(session, [{ drawn: ['drained-brain#1', 'time-2#1', 'urban-explorer#1'], keep: 1 }], question, []);
+    expect(result.source).toBe('gemini');
+    expect(result.keeps).toEqual([['drained-brain#1']]);
+  });
+
+  it.each([null, 'expand-hand#1'])('prioritizes a ready Move when Gemini selects %s', async (playCard) => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ keeps: [], playCard }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const session = strategySession();
+    session.questionNumber = MOVE_QUESTION_THRESHOLD;
+    session.deck.hand = ['move#1', 'expand-hand#1'];
+    expect(await chooseCardStrategy(session, [], question, [])).toMatchObject({ source: 'gemini', playCard: 'move#1' });
+    const prompt = JSON.parse(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).input);
+    expect(prompt.state.moveTiming).toMatchObject({ ready: true, threshold: 8, questionsSinceRelocation: 8 });
+  });
+
+  it('overrides a premature Gemini Move without calling relocation', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ keeps: [], playCard: 'move#1' }) })));
+    const session = strategySession();
+    session.questionNumber = MOVE_QUESTION_THRESHOLD - 1;
+    session.deck.hand = ['move#1', 'expand-hand#1'];
+    const result = await chooseCardStrategy(session, [], question, []);
+    expect(result.source).toBe('fallback');
+    expect(result.playCard).toBe('expand-hand#1');
+    expect(session.deck.hand).toContain('move#1');
+  });
+
+  it.each([false, true])('reserves the ordinary response slot for a ready Move (Gemini enabled: %s)', async (geminiEnabled) => {
+    if (geminiEnabled) process.env.GEMINI_API_KEY = 'test-key';
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const session = strategySession();
+    session.questionNumber = MOVE_QUESTION_THRESHOLD;
+    session.deck.hand = ['move#1', 'randomize#1', 'veto#1'];
+    expect(await chooseResponseStrategy(session, question, legalResponseCards(session), 2)).toEqual({ action: 'answer' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes a newly drawn Move at the threshold in fallback mode', async () => {
+    const session = strategySession();
+    session.questionNumber = MOVE_QUESTION_THRESHOLD;
+    const result = await chooseCardStrategy(session, [{ drawn: ['move#1', 'time-12#1'], keep: 1 }], question, []);
+    expect(result).toMatchObject({ source: 'fallback', keeps: [['move#1']], playCard: 'move#1' });
+  });
+
+  it.each(['veto', 'randomize'] as const)('spends Duplicate before the original %s for Gemini and fallback responses', async (action) => {
+    const source = `${action}#1` as CardInstanceId;
+    process.env.GEMINI_API_KEY = 'test-key';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ action, card: source }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const session = strategySession();
+    session.deck.hand = [source, 'duplicate#1', 'duplicate#2'];
+    const model = await chooseResponseStrategy(session, question, legalResponseCards(session), 2);
+    expect(model).toMatchObject({ action, card: 'duplicate#1' });
+    const prompt = JSON.parse(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).input);
+    expect(prompt).toMatchObject({ phase: 'seeking', questionNumber: 1 });
+
+    delete process.env.GEMINI_API_KEY;
+    // Exercise the deterministic fallback's spending branch without relying on one seed.
+    let copied = false;
+    for (let index = 0; index < 100 && !copied; index += 1) {
+      session.sessionId = `copy-response-${index}`;
+      const fallback = await chooseResponseStrategy(session, question, legalResponseCards(session), 2);
+      if (fallback.action === 'answer') continue;
+      expect(fallback).toMatchObject({ action, card: 'duplicate#1' });
+      expect(playResponseCard(session, fallback.card!, action)).toBe(true);
+      expect(session.deck.hand).toEqual([source, 'duplicate#2']);
+      copied = true;
+    }
+    expect(copied).toBe(true);
+  });
+
+  it('uses Duplicate when Gemini selects its expansion source', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ keeps: [], playCard: 'expand-hand#1' }) })));
+    const session = strategySession();
+    session.deck.hand = ['expand-hand#1', 'duplicate#1', 'time-2#1'];
+    const result = await chooseCardStrategy(session, [], question, []);
+    expect(result).toMatchObject({ source: 'gemini', playCard: 'duplicate#1' });
+  });
+
+  it('does not silently change a modeled Duplicate target when that source is not kept', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ keeps: [['veto#1']], playCard: 'duplicate#1' }) })));
+    const session = strategySession();
+    session.deck.hand = ['right-turn#1', 'duplicate#1', 'time-2#1'];
+    const result = await chooseCardStrategy(session, [{ drawn: ['expand-hand#1', 'veto#1'], keep: 1 }], question, []);
+    expect(result).toMatchObject({ source: 'gemini', keeps: [['veto#1']], playCard: undefined });
+  });
+
+  it('corrects a model keeping six minutes over Water Weight, with no blanket uncertainty penalty', async () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ totalTokens: 100 }))
+      .mockResolvedValueOnce(Response.json({ output_text: JSON.stringify({ keeps: [['time-6#1']], playCard: null }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await chooseCardStrategy(strategySession(), [{ drawn: ['time-6#1', 'water-weight#1'], keep: 1 }], question, []);
+    expect(result).toMatchObject({ source: 'gemini', keeps: [['water-weight#1']] });
+    const prompt = JSON.parse(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).input);
+    expect(prompt.instruction).toContain('A casting condition or confirmation requirement alone is not a reason to downgrade a curse');
+    expect(prompt.instruction).toContain('same keep priority, including Drained Brain');
   });
 
   it('does not spend a Gemini call when there is no keep or play decision', async () => {

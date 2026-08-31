@@ -578,6 +578,19 @@ article.radar-preview-active {
 .solo-answer-actions h3 { margin: 0 0 .35rem; color: #5b21b6; }
 .solo-answer-actions p { margin-top: .3rem; color: #4c1d95; font-size: .8rem; }
 .solo-answer-continue { margin-top: .85rem; }
+.solo-response-notice { margin: .5rem 0 .85rem; padding: .9rem; border: 2px solid #2563eb; border-radius: .85rem; background: #eff6ff; color: #1e3a8a; overflow-wrap: anywhere; }
+.solo-response-notice.vetoed { border-color: #b91c1c; background: #fff1f2; color: #881337; }
+.solo-response-notice-heading { display: flex; align-items: center; gap: .7rem; }
+.solo-response-symbol { display: grid; place-items: center; flex: 0 0 2.5rem; height: 2.5rem; border-radius: .65rem; background: #1d4ed8; color: #fff; font-size: 1.6rem; font-weight: 850; }
+.vetoed .solo-response-symbol { background: #b91c1c; }
+.solo-response-kicker { font-size: .72rem; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
+.solo-response-notice h2 { margin: .15rem 0 0; color: inherit; font-size: clamp(1.3rem, 5vw, 1.75rem); line-height: 1.15; }
+.solo-response-questions { display: grid; gap: .65rem; margin: .8rem 0 0; }
+.solo-response-questions div { padding-top: .6rem; border-top: 1px solid #1e3a8a30; }
+.solo-response-questions dt { font-size: .72rem; font-weight: 750; }
+.solo-response-questions dd { margin: .2rem 0 0; font-size: .95rem; font-weight: 750; }
+.solo-response-questions s { font-weight: 500; }
+.solo-response-copy, .solo-response-explanation { margin: .65rem 0 0; font-size: .82rem; line-height: 1.45; }
 .game-summary-backdrop { align-items: end; padding: 0; }
 .game-summary { width: min(100%, 560px); max-height: 92dvh; border-radius: 1.15rem 1.15rem 0 0; padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom)); }
 .summary-hero { display: flex; gap: .75rem; align-items: center; padding: .3rem 0 .8rem; }

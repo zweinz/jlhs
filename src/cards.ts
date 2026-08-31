@@ -1,5 +1,5 @@
 export type CardKind = 'time-bonus' | 'powerup' | 'curse';
-export type CardTiming = 'round-end' | 'response-window' | 'after-answer' | 'any-legal-window';
+export type CardTiming = 'round-end' | 'response-window' | 'after-answer' | 'any-time';
 export type CardResolution = 'immediate' | 'manual-clear' | 'timed' | 'persistent' | 'task-then-persistent' | 'hangman' | 'question-counter';
 
 export type CardId =
@@ -19,6 +19,8 @@ export type CardDefinition = {
   description: string;
   smallMinutes?: number;
   aiPlayable?: boolean;
+  /** A concrete Solo implementation limitation, not simply a casting condition. */
+  aiAwkwardReason?: string;
   uncertainCasting?: boolean;
   blocksQuestions?: boolean;
   blocksTransit?: boolean;
@@ -43,7 +45,7 @@ const time = (id: CardId, minutes: number, count: number): CardDefinition => ({
 const powerup = (id: CardId, name: string, count: number, description: string): CardDefinition => ({
   id, kind: 'powerup', name, count, description, aiPlayable: true, endgameAllowed: id !== 'move',
   resolution: 'immediate',
-  timing: id === 'veto' || id === 'randomize' ? 'response-window' : id === 'duplicate' ? 'any-legal-window' : 'after-answer',
+  timing: id === 'veto' || id === 'randomize' ? 'response-window' : id === 'duplicate' ? 'any-time' : 'after-answer',
   completionInstruction: 'The server resolves this power-up immediately and records it in public play history.',
 });
 
@@ -68,13 +70,13 @@ export const CARD_CATALOG: Record<CardId, CardDefinition> = Object.fromEntries((
   powerup('discard-1-draw-2', 'Discard 1, draw 2', 4, 'Discard one other card, then draw and keep two cards.'),
   powerup('discard-2-draw-3', 'Discard 2, draw 3', 4, 'Discard two other cards, then draw and keep three cards.'),
   powerup('expand-hand', 'Draw 1, expand 1', 2, 'Draw one card and increase the maximum hand size by one.'),
-  powerup('duplicate', 'Duplicate another card', 2, 'Play as a copy of another card currently in hand.'),
+  powerup('duplicate', 'Duplicate another card', 2, 'Play at any time as a copy of another card currently in hand. Does not count toward the one-card-per-question limit; the copied card’s casting costs and conditions still apply.'),
   powerup('move', 'Move', 1, 'Discard the hand, reveal the old station, and immediately establish a new hiding zone selected through the Solo relocation pipeline.'),
   powerup('randomize', 'Randomize question', 4, 'Replace the pending question with a random unasked question from the same category.'),
   powerup('veto', 'Veto question', 4, 'Give no answer and earn no reward; the question still counts as asked.'),
   curse('bridge-troll', 'Curse of the Bridge Troll', 'The seekers must ask their next question from under a bridge.', { uncertainCasting: true, blocksQuestions: true, castingInstruction: 'The seekers must be at least 5 miles from the hider.', completionInstruction: 'Ask the next question from under a bridge, then report the curse cleared.' }),
   curse('cairn', 'Curse of the Cairn', 'Build opposing freestanding rock towers before another question.', { aiPlayable: false, blocksQuestions: true, castingInstruction: 'The hider must first build the qualifying rock tower.' }),
-  curse('distant-cuisine', 'Curse of the Distant Cuisine', 'Seekers must visit a restaurant serving food from a country at least as far away as the hider’s restaurant country before asking another question.', { uncertainCasting: true, blocksQuestions: true, castingInstruction: 'The hider must be at the selected restaurant inside the hiding zone.', completionInstruction: 'Visit a qualifying restaurant, then report the curse cleared.' }),
+  curse('distant-cuisine', 'Curse of the Distant Cuisine', 'Seekers must visit a restaurant serving food from a country at least as far away as the selected reference restaurant’s cuisine country before asking another question.', { uncertainCasting: true, blocksQuestions: true, castingInstruction: 'Choose a reference restaurant inside the hiding zone. Xeno does not have to be there and does not relocate.', completionInstruction: 'Visit a qualifying restaurant, then report the curse cleared.' }),
   curse('drained-brain', 'Curse of the Drained Brain', 'Three specific questions from different categories are disabled for the rest of the run.', { castingInstruction: 'Discard the entire hand.', resolution: 'persistent', completionInstruction: 'This restriction remains active for the rest of the game.' }),
   curse('egg-partner', 'Curse of the Egg Partner', 'The seekers must acquire an egg before asking another question. It then remains an official team member for the rest of the run.', { blocksQuestions: true, endgameAllowed: false, failureBonusMinutes: 30, failureInstruction: 'Report if the egg cracks or any team member is abandoned.', discardCost: 2, resolution: 'task-then-persistent', completionInstruction: 'Report when the egg has been acquired; the app will continue tracking it.' }),
   curse('endless-tumble', 'Curse of the Endless Tumble', 'Seekers must roll a die at least 100 feet unaided and have it land on 5 or 6 before asking another question.', { blocksQuestions: true, failureBonusMinutes: 10, failureInstruction: 'Report if the rolling die accidentally hits someone.', castingInstruction: 'Roll a die; on 5 or 6 the curse has no effect.', completionInstruction: 'Complete the qualifying 100-foot roll, then report the curse cleared.' }),
@@ -92,7 +94,7 @@ export const CARD_CATALOG: Record<CardId, CardDefinition> = Object.fromEntries((
   curse('spotty-memory', 'Curse of Spotty Memory', 'A random question category is disabled at all times and rerolled after each question for the rest of the run.', { discardCost: 1, discardKind: 'time-bonus', resolution: 'persistent', completionInstruction: 'This restriction remains active for the rest of the game.' }),
   curse('bird-guide', 'Curse of the Bird Guide', 'Xeno chooses a short randomized duration. Seekers must continuously film any single wild bird for at least that long.', { blocksQuestions: true, completionInstruction: 'Film one wild bird continuously for the displayed duration, then report the curse cleared.' }),
   curse('unguided-tourist', 'Curse of the Unguided Tourist', 'Seekers must find the displayed unzoomed Street View scene within 500 feet of their submitted location before using transportation or asking another question.', { uncertainCasting: true, blocksQuestions: true, blocksTransit: true, castingInstruction: 'Seekers must currently be outside.', completionInstruction: 'Find the displayed scene in person and report the curse cleared.' }),
-  curse('u-turn', 'Curse of the U-Turn', 'Seekers must disembark their current transportation at the next station.', { uncertainCasting: true, castingInstruction: 'Seekers must be heading away from the hider, and the next station must have another form of transit within 30 minutes.', completionInstruction: 'Disembark at the next station, then report the curse cleared.' }),
+  curse('u-turn', 'Curse of the U-Turn', 'Seekers must disembark their current transportation at the next station.', { uncertainCasting: true, aiAwkwardReason: 'Requires live travel direction, next-stop, and connecting-service information that Solo does not track.', castingInstruction: 'Seekers must be heading away from the hider, and the next station must have another form of transit within 30 minutes.', completionInstruction: 'Disembark at the next station, then report the curse cleared.' }),
   curse('urban-explorer', 'Curse of the Urban Explorer', 'For the rest of the run, seekers cannot ask questions while on transit or inside a transit station.', { discardCost: 2, resolution: 'persistent', completionInstruction: 'This restriction remains active for the rest of the game.' }),
   curse('water-weight', 'Curse of Water Weight', 'Seekers must acquire at least two liters of liquid per seeker before asking another question and carry it for the rest of the run.', { uncertainCasting: true, blocksQuestions: true, failureBonusMinutes: 30, failureInstruction: 'Report if the liquid is lost or abandoned after acquisition.', castingInstruction: 'Seekers must be within 1,000 feet (300 meters) of a body of water.', resolution: 'task-then-persistent', completionInstruction: 'Report when the liquid has been acquired; the app will continue tracking it.' }),
   curse('zoologist', 'Curse of the Zoologist', 'Xeno chooses a randomized common animal category. Seekers must photograph a wild animal in that category.', { blocksQuestions: true, completionInstruction: 'Photograph a wild animal in the displayed category, then report the curse cleared.' }),
@@ -135,11 +137,12 @@ export function fallbackCardRank(instance: CardInstanceId) {
   if (card.id === 'veto') return 1_100;
   if (card.kind === 'time-bonus') {
     const minutes = card.smallMinutes ?? 0;
+    if (minutes === 2) return 100;
     return minutes >= 8 ? 1_000 + minutes : 800 + minutes;
   }
-  if (card.kind === 'powerup') return card.id === 'expand-hand' ? 850 : card.id === 'duplicate' ? 800 : 700;
+  if (card.kind === 'powerup') return card.id === 'expand-hand' ? 950 : card.id === 'duplicate' ? 980 : 820;
   if (!card.aiPlayable) return 0;
-  return card.uncertainCasting ? 250 : 900;
+  return card.aiAwkwardReason ? 250 : 900;
 }
 
 export type DrawGroupResult = { drawn: CardInstanceId[]; kept: CardInstanceId[]; discarded: CardInstanceId[] };

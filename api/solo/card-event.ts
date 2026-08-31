@@ -1,8 +1,9 @@
-import { CARD_CATALOG } from '../../src/cards';
+import { CARD_CATALOG, cardIdFromInstance } from '../../src/cards';
 import { addDecision, publicCardState, reconcileCardEffects } from '../_solo-cards';
 import { jsonError, readJson, seal, unseal, type SecretSoloSession } from '../_solo-session';
-import { isHidingPositionAllowed } from '../../src/noHideZones';
+import { distanceMeters } from '../../src/solo';
 import { requireRunningSession, SoloPausedError } from '../_solo-clock';
+import { playSoloCards } from '../_solo-play';
 
 export const config = { runtime: 'edge' };
 
@@ -28,28 +29,22 @@ export default async function handler(request: Request) {
 
     if (body.event.type === 'accept-pending') {
       if (effect.status !== 'pending') return jsonError('That curse is not awaiting confirmation.', 409);
-      if (effect.cardId === 'distant-cuisine' && (!effect.proposedPosition || !effect.proposedPanorama)) return jsonError('Distant Cuisine has no validated restaurant location.', 409);
-      if (effect.cardId === 'distant-cuisine' && effect.proposedPosition && !isHidingPositionAllowed(effect.proposedPosition)) return jsonError('Distant Cuisine cannot move the hider into a no-hide zone.', 409);
+      if (effect.cardId === 'distant-cuisine' && (!effect.placeName || !effect.proposedPosition ||
+        !Number.isFinite(effect.proposedPosition.lat) || !Number.isFinite(effect.proposedPosition.lng) ||
+        distanceMeters(effect.proposedPosition, session.station.position) > session.stationZoneMiles * 1609.344)) {
+        return jsonError('Distant Cuisine needs a validated reference restaurant inside the hiding zone.', 409);
+      }
       if (effect.cardId === 'mediocre-travel-agent' && !effect.proposedPosition) return jsonError('Mediocre Travel Agent has no validated destination.', 409);
       if (effect.cardId === 'unguided-tourist' && !effect.imageUrl) return jsonError('Unguided Tourist has no validated Street View scene.', 409);
       effect.status = 'active';
-      if (effect.cardId === 'distant-cuisine' && effect.proposedPosition) {
-        const previousStationName = session.station.name;
-        session.spot = effect.proposedPosition;
-        if (effect.proposedPanorama) session.panorama = effect.proposedPanorama;
-        session.movementHistory = [...(session.movementHistory ?? []), {
-          at: new Date().toISOString(), reason: 'distant-cuisine', station: session.station,
-          position: session.spot, previousStationName,
-        }];
-        session.positionRevision = (session.positionRevision ?? 0) + 1;
-      }
       message = `${effect.name} is active. ${effect.completionInstruction}`;
+      if (effect.cardId === 'distant-cuisine') message += ' The restaurant is a reference only; Xeno has not moved.';
     } else if (body.event.type === 'reject-pending') {
       if (effect.status !== 'pending') return jsonError('That curse is not awaiting confirmation.', 409);
       session.activeEffects = session.activeEffects?.filter((candidate) => candidate.id !== effect.id);
       session.deck.usedPile = session.deck.usedPile.filter((instance) => instance !== effect.cardInstance);
       session.deck.discardPile.push(effect.cardInstance);
-      message = `${effect.name} was rejected and discarded. The every-other-question cooldown remains.`;
+      message = `${effect.name} was rejected and discarded. ${cardIdFromInstance(effect.cardInstance) === 'duplicate' ? 'Duplicate did not use the normal card allowance.' : 'The every-other-question cooldown remains.'}`;
     } else if (body.event.type === 'veto-infeasible') {
       const resolution = CARD_CATALOG[effect.cardId].resolution;
       if (effect.status !== 'active' || (resolution !== 'manual-clear' && resolution !== 'task-then-persistent')) {
@@ -66,7 +61,7 @@ export default async function handler(request: Request) {
         : body.event.reason === 'unsafe' ? 'unsafe or inaccessible'
           : body.event.reason === 'closed' ? 'closed, weather, or missing equipment'
             : body.event.note?.trim() || 'not doable';
-      message = `${effect.name} was vetoed by the seekers as ${reason}. No bonus was awarded; the curse cooldown still counts.`;
+      message = `${effect.name} was vetoed by the seekers as ${reason}. No bonus was awarded; ${cardIdFromInstance(effect.cardInstance) === 'duplicate' ? 'Duplicate did not use the normal card allowance' : 'the curse cooldown still counts'}.`;
     } else if (body.event.type === 'clear') {
       if (CARD_CATALOG[effect.cardId].resolution !== 'manual-clear' || effect.status !== 'active') {
         return jsonError(`${effect.name} cannot be cleared manually.`, 409);
@@ -128,8 +123,12 @@ export default async function handler(request: Request) {
       }
     }
     addDecision(session, message);
+    // Do not immediately re-cast an effect the seekers just rejected or found unsafe.
+    const playedCardAnnouncements = ['reject-pending', 'veto-infeasible', 'report-failure'].includes(body.event.type)
+      ? [] : await playSoloCards(session, { allowNormal: false });
+    if (playedCardAnnouncements.length) message += ` ${playedCardAnnouncements.join(' ')}`;
     const cardState = publicCardState(session);
-    return Response.json({ token: await seal(session), phase: session.phase, message, cardState }, {
+    return Response.json({ token: await seal(session), phase: session.phase, message, playedCardAnnouncements, cardState }, {
       headers: { 'cache-control': 'no-store' },
     });
   } catch (error) {

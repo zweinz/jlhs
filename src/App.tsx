@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { SoloResponseNotice } from './SoloResponseNotice';
 import * as turf from '@turf/turf';
 import { setAllConstraintsEnabled, stationStatusesForAll, statusesForAll } from './bulkActions';
 import { combineConstraints, excludedArea, manualReachArea, nearestPoi, partition, partitionLabelPosition, questionPreviewArea, stationIdsOverlappingArea } from './geometry';
@@ -62,11 +63,13 @@ import {
   answeredSoloConstraint,
   soloRevealMapFeatures,
   soloPhotoOptionLabel,
+  soloPhotoLocationNote,
   soloStateForNewGame,
   type SoloClientSession,
   type SoloQuestionRecord,
   type SoloPublicCardState,
   type SoloStartResponse,
+  type SoloPhotoKind,
   vetoedSoloConstraint,
 } from './solo';
 import {
@@ -173,7 +176,7 @@ const soloPhotoChoices: RulebookSubject[] = SOLO_PHOTO_SUBJECTS.map((subject) =>
   label: soloPhotoOptionLabel(subject),
   status: 'in-play',
   support: subject.help.startsWith('Unavailable') ? 'not-mapped' : subject.help.startsWith('Supported') || subject.help.startsWith('Easter egg') ? 'exact' : 'approximate',
-  notes: [subject.help, 'Solo house rule: checked-in POIs or Google Places choose eligible targets; Street View approximates framing without visually verifying the returned image.'],
+  notes: [soloPhotoLocationNote(subject.id), subject.help, 'Solo house rule: checked-in streets/POIs or Google Places choose eligible targets; Street View approximates framing without visually verifying the returned image.'],
 }));
 
 const SOLO_STORAGE_KEY = 'sf-hiding-area-solo-v3';
@@ -2206,13 +2209,11 @@ export default function App() {
               const missingFields = missingQuestionFields(constraint);
               const questionReady = missingFields.length === 0;
               const askedRecord = solo?.questions[constraint.id];
-              const randomizedFrom = askedRecord?.randomizedFrom ?? 'Original question';
-              const randomizedTo = askedRecord?.randomizedTo ?? 'Replacement question';
               const categoryChoices = solo && constraint.kind === 'photo-reference' ? soloPhotoChoices : subjectChoices(constraint.kind);
               const questionNotes = solo && constraint.kind === 'photo-reference'
                 ? category === 'trace-nearest-street-path'
                   ? ['Solo house rule: a precomputed nearest-street orientation approximates the required intersection-to-intersection trace.', 'North is up. The clue covers named DataSF streets, not every park or unnamed path.', 'The image contains no street name or coordinates and uses no runtime map or model call.']
-                  : ['Solo house rule: Google Street View approximates a live hider photo.', 'Station cards use a panorama at the hiding station. Other supported cards use Xeno’s current hiding panorama, which may change after Move or Distant Cuisine.', 'The server never exposes a coordinate-bearing Google request URL.', 'If imagery becomes unavailable, “I cannot answer” remains a valid answer.']
+                  : ['Solo house rule: Google Street View approximates a live hider photo.', soloPhotoLocationNote(category as SoloPhotoKind), 'Current-position clues follow Xeno after Move. Distant Cuisine does not change Xeno’s position. Elsewhere-in-zone clues never fall back to Xeno’s hiding panorama.', 'The server never exposes a coordinate-bearing Google request URL.', 'If the required location has no usable imagery, “I cannot answer” gives no card reward.']
                 : definition.notes;
               const selectedSubject = categoryChoices.find((subject) => subject.id === category);
               const selectedPriorUses = priorUsesFor(constraint);
@@ -2249,8 +2250,7 @@ export default function App() {
                   {!questionReady && <p className="draft-status">Draft disabled · add {missingFields.join(' and ')} to enable it.</p>}
                   {!askedRecord && disablingCurse && <p className="draft-status">Disabled by {disablingCurse.name}. Choose another question.</p>}
                   {state.mode === 'hider' && <div className={`answer-result ${(constraint.kind === 'endgame-confirmation' || (state.hiderPosition && questionReady)) ? '' : 'waiting'}`}><span>Hider answer</span><strong>{!questionReady ? 'Complete the draft first' : constraint.kind === 'endgame-confirmation' ? 'Record whether this pin is inside your hiding zone' : state.hiderPosition ? hiderAnswer(constraint, state.hiderPosition, regions) : 'Set your position above'}</strong></div>}
-                  {askedRecord?.outcome === 'randomized' && <div className="answer-result randomized-result"><span>Xeno played Randomize question</span><p><s>{randomizedFrom}</s></p><strong>Replaced with: {randomizedTo}</strong></div>}
-                  {askedRecord?.outcome === 'vetoed' && <div className="answer-result vetoed-result"><span>Xeno played Veto question</span><p><s>{constraint.name}</s></p><strong>No answer was given.</strong><p>The question counts as asked, no cards were drawn, and it does not affect the map.</p></div>}
+                  {askedRecord && <SoloResponseNotice record={askedRecord} questionName={constraint.name} />}
                   {askedRecord && askedRecord.outcome !== 'vetoed' && <div className="answer-result"><span>{askedRecord.outcome === 'randomized' ? 'Xeno’s answer to replacement' : 'Xeno’s answer'} · drew {askedRecord.cardsDrawn} · kept {askedRecord.cardsKept}</span><strong>{askedRecord.displayText}</strong>{askedRecord.photoUrl && <img className="solo-photo" src={askedRecord.photoUrl} alt={constraint.kind === 'photo-reference' && constraint.category === 'you' ? 'Xeno selfie easter egg' : `${constraint.name} Street View answer`} onError={(event) => { event.currentTarget.hidden = true; setMessage('The photo could not be loaded. The text answer remains available.'); }} />}</div>}
                   {askedRecord?.playedCards?.filter((announcement) =>
                     !(askedRecord.outcome === 'randomized' && announcement.startsWith('Xeno played Randomize question')) &&
@@ -2374,9 +2374,11 @@ export default function App() {
       </div>}
       {solo && soloAnswerSheet && <div className="modal-backdrop solo-answer-backdrop" role="presentation">
         <section ref={soloAnswerSheetRef} className="modal solo-answer-sheet" role="dialog" aria-modal="true" aria-labelledby="solo-answer-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === 'Escape') setSoloAnswerSheet(undefined); }}>
-          <div className="solo-answer-heading"><span>{soloAnswerSheet.record.outcome === 'vetoed' ? 'Question vetoed' : 'Xeno answered'}</span><h2 id="solo-answer-title">{soloAnswerSheet.record.outcome === 'vetoed' ? 'No answer' : soloAnswerSheet.record.displayText}</h2><p>{soloAnswerSheet.questionName}</p></div>
-          {soloAnswerSheet.record.outcome === 'randomized' && <div className="solo-answer-detail randomized-result"><b>Question replaced</b><p><s>{soloAnswerSheet.record.randomizedFrom}</s><br />→ {soloAnswerSheet.record.randomizedTo}</p></div>}
-          {soloAnswerSheet.record.outcome === 'vetoed' ? <p className="solo-answer-detail">The question counts as asked, but Xeno gave no answer and received no card reward.</p> : <div className="solo-answer-stats"><span>Drew <b>{soloAnswerSheet.record.cardsDrawn}</b></span><span>Kept <b>{soloAnswerSheet.record.cardsKept}</b></span></div>}
+          <SoloResponseNotice record={soloAnswerSheet.record} questionName={soloAnswerSheet.questionName} titleId={soloAnswerSheet.record.outcome === 'vetoed' ? 'solo-answer-title' : undefined} />
+          {soloAnswerSheet.record.outcome !== 'vetoed' && <>
+            <div className="solo-answer-heading"><span>{soloAnswerSheet.record.outcome === 'randomized' ? 'Xeno’s answer to the replacement' : 'Xeno answered'}</span><h2 id="solo-answer-title">{soloAnswerSheet.record.displayText}</h2><p>{soloAnswerSheet.record.randomizedTo ?? soloAnswerSheet.questionName}</p></div>
+            <div className="solo-answer-stats"><span>Drew <b>{soloAnswerSheet.record.cardsDrawn}</b></span><span>Kept <b>{soloAnswerSheet.record.cardsKept}</b></span></div>
+          </>}
           {soloAnswerSheet.record.photoUrl && <img className="solo-answer-photo" src={soloAnswerSheet.record.photoUrl} alt={`${soloAnswerSheet.questionName} answer`} onError={(event) => { event.currentTarget.hidden = true; setMessage('The photo could not be loaded. The text answer remains available.'); }} />}
           {soloAnswerCardActions.length > 0 && <section className="solo-answer-actions" aria-labelledby="solo-answer-actions-title"><h3 id="solo-answer-actions-title">Xeno also played</h3>{soloAnswerCardActions.map((announcement) => <p key={announcement}>{announcement}</p>)}</section>}
           {soloAnswerSheet.fallbackMessage && <p className="warning-line">{soloAnswerSheet.fallbackMessage}</p>}

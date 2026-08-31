@@ -2,6 +2,7 @@ import type { Position, TransitScope } from '../src/types';
 import type { SoloMapEvidence, SoloPhase } from '../src/solo';
 import { normalizeQuestionUses } from '../src/solo';
 import type { CardId, CardInstanceId, DeckState } from '../src/cards';
+import { deterministicMazeSvg } from './_solo-maze';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -25,6 +26,10 @@ export type SecretSoloSession = {
   spot: Position;
   panorama: { id: string; date?: string };
   stationPanorama?: { id: string; date?: string };
+  zonePhotoScenes?: {
+    anchor: string;
+    scenes: Partial<Record<'widest-street' | 'two-buildings', { id: string; date?: string; position: Position }>>;
+  };
   route: {
     durationSeconds: number;
     distanceMeters: number;
@@ -34,6 +39,7 @@ export type SecretSoloSession = {
   };
   deck: DeckState;
   questionNumber: number;
+  lastRelocationQuestionNumber?: number;
   lastCurseQuestionNumber?: number;
   blockedQuestionKeys?: string[];
   activeEffects?: SoloEffectState[];
@@ -84,6 +90,8 @@ export type SoloEffectState = {
   placeName?: string;
   proposedPosition?: Position;
   proposedPanorama?: { id: string; date?: string };
+  mazeSeed?: string;
+  /** Legacy sessions stored the drawing. New sessions keep only its seed. */
   mazeSvg?: string;
   hangmanWord?: string;
   hangmanWrong?: string[];
@@ -132,6 +140,27 @@ type SealedAsset = SecretSoloSession | PhotoAsset | StreetOrientationAsset;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+export const MAX_SOLO_TOKEN_LENGTH = 50_000;
+const MAX_LEGACY_MAZE_TOKEN_LENGTH = 200_000;
+
+function compactLegacyMaze(session: SecretSoloSession) {
+  let compacted = false;
+  const activeEffects = session.activeEffects?.map((effect) => {
+    if (effect.cardId !== 'labyrinth' || !effect.mazeSvg) return effect;
+    const mazeSeed = effect.mazeSeed ?? `${session.sessionId}:${effect.startedQuestion}`;
+    // Only replace a known drawing when its seed reproduces the exact old puzzle.
+    if (effect.mazeSvg !== deterministicMazeSvg(mazeSeed)) return effect;
+    const { mazeSvg: _legacyDrawing, ...rest } = effect;
+    compacted = true;
+    return { ...rest, mazeSeed };
+  });
+  return { session: compacted ? { ...session, activeEffects } : session, compacted };
+}
+
+function estimatedTokenLength(serializedBytes: Uint8Array) {
+  // Twelve-byte IV, a separator, and base64url ciphertext including the GCM tag.
+  return 17 + Math.ceil((serializedBytes.byteLength + 16) * 4 / 3);
+}
 
 function base64Url(bytes: Uint8Array) {
   let binary = '';
@@ -157,17 +186,21 @@ function secrets() {
 }
 
 export async function seal(value: SealedAsset) {
+  const compact = value.kind === 'solo-session' ? compactLegacyMaze(value).session : value;
+  const serialized = encoder.encode(JSON.stringify(compact));
+  if (estimatedTokenLength(serialized) > MAX_SOLO_TOKEN_LENGTH) throw new Error('Session token is too large.');
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     await encryptionKey(secrets()[0]),
-    encoder.encode(JSON.stringify(value)),
+    serialized,
   );
   return `${base64Url(iv)}.${base64Url(new Uint8Array(encrypted))}`;
 }
 
 export async function unseal<T extends SealedAsset>(token: string, expectedKind: T['kind']): Promise<T> {
-  if (token.length > 50_000) throw new Error('Session token is too large.');
+  const oversized = token.length > MAX_SOLO_TOKEN_LENGTH;
+  if (oversized && (expectedKind !== 'solo-session' || token.length > MAX_LEGACY_MAZE_TOKEN_LENGTH)) throw new Error('Session token is too large.');
   const [ivValue, encryptedValue, extra] = token.split('.');
   if (!ivValue || !encryptedValue || extra) throw new Error('Malformed session token.');
   for (const secret of secrets()) {
@@ -177,11 +210,18 @@ export async function unseal<T extends SealedAsset>(token: string, expectedKind:
         await encryptionKey(secret),
         fromBase64Url(encryptedValue),
       );
-      const value = JSON.parse(decoder.decode(clear)) as T;
+      let value = JSON.parse(decoder.decode(clear)) as T;
       if (expectedKind === 'solo-session' && !(value as SecretSoloSession).transitScope) {
         (value as SecretSoloSession).transitScope = 'all';
       }
       if (expectedKind === 'solo-session') {
+        // Authenticate first, then allow the old oversized maze format only if
+        // its exact puzzle can be compacted back under the normal token limit.
+        const compact = compactLegacyMaze(value as SecretSoloSession);
+        if (oversized && (!compact.compacted || estimatedTokenLength(encoder.encode(JSON.stringify(compact.session))) > MAX_SOLO_TOKEN_LENGTH)) {
+          throw new Error('Session token is too large.');
+        }
+        value = compact.session as T;
         const session = value as SecretSoloSession;
         session.questionUses = normalizeQuestionUses(session.questionUses ?? {});
         session.hidingTimeMinutes = session.hidingTimeMinutes ?? 30;

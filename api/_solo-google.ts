@@ -1,6 +1,6 @@
 import * as turf from '@turf/turf';
 import { pois, SF_BOUNDS } from '../src/data';
-import { nearbyStationCount, stationDifficulty } from '../src/solo';
+import { distanceMeters, nearbyStationCount, stationDifficulty } from '../src/solo';
 import { isHidingPositionAllowed } from '../src/noHideZones';
 import { primaryTransitStationIds, validStations } from '../src/transit';
 import type { Position, TransitScope } from '../src/types';
@@ -200,6 +200,7 @@ export async function panoramaAt(position: Position, source: 'outdoor' | 'any' =
   const metadata = (await response.json()) as PanoramaMetadata;
   if (metadata.status !== 'OK' || !metadata.pano_id || !metadata.location) return null;
   const { lat, lng } = metadata.location;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   if (lat < SF_BOUNDS.south || lat > SF_BOUNDS.north || lng < SF_BOUNDS.west || lng > SF_BOUNDS.east) return null;
   return { id: metadata.pano_id, date: metadata.date, position: metadata.location };
 }
@@ -221,6 +222,7 @@ export const TARGETED_PHOTO_KINDS = [
 type PlaceTargetSpec = { types: string[]; label: string; minimumReviews?: number };
 
 const placeTargetSpecs: Partial<Record<PhotoTargetKind, PlaceTargetSpec>> = {
+  'a-tree': { types: ['park', 'city_park', 'dog_park'], label: 'park with a tree' },
   'restaurant-interior': { types: ['restaurant'], label: 'restaurant' },
   park: { types: ['park', 'city_park', 'dog_park'], label: 'qualifying park', minimumReviews: 6 },
   'grocery-store-aisle': {
@@ -292,19 +294,22 @@ function localPhotoCandidates(kind: PhotoTargetKind): TargetCandidate[] {
 }
 
 function targetDisplayText(kind: PhotoTargetKind) {
-  if (kind === 'a-tree') return 'A tree · outdoor Street View aimed into a qualifying park; tree presence is a best-effort approximation';
-  if (kind === 'restaurant-interior') return 'Restaurant interior · best-effort through-window or indoor Street View scene';
-  if (kind === 'park') return 'Park · outdoor Street View aimed into a qualifying park in the hiding zone';
-  if (kind === 'grocery-store-aisle') return 'Grocery-store aisle · best-effort indoor or entrance Street View scene';
-  if (kind === 'place-of-worship') return 'Place of worship · best-effort location-matchable Street View scene';
-  return 'Train platform · best-effort platform or station Street View scene';
+  if (kind === 'a-tree') return 'A tree · outdoor Street View aimed into a park elsewhere in the hiding zone; tree framing is a best-effort approximation';
+  if (kind === 'restaurant-interior') return 'Restaurant interior · best-effort outdoor, through-window view elsewhere in the hiding zone';
+  if (kind === 'park') return 'Park · outdoor Street View aimed into a qualifying park in the hiding zone, away from Xeno’s current position';
+  if (kind === 'grocery-store-aisle') return 'Grocery-store aisle · best-effort indoor or entrance Street View scene elsewhere in the hiding zone';
+  if (kind === 'place-of-worship') return 'Place of worship · best-effort location-matchable Street View scene elsewhere in the hiding zone';
+  return 'Train platform · best-effort platform or station Street View scene elsewhere in the hiding zone';
 }
+
+export const ZONE_PHOTO_SEPARATION_METERS = 50;
 
 export async function photoTargetInZone(
   kind: string | undefined,
   station: Position,
   seededHeading = 0,
   stationZoneMiles = 0.25,
+  avoid?: { panoramaId: string; position: Position },
 ): Promise<PhotoTarget | undefined> {
   if (!kind || !(TARGETED_PHOTO_KINDS as readonly string[]).includes(kind)) {
     return undefined;
@@ -329,11 +334,10 @@ export async function photoTargetInZone(
     .filter(({ miles }) => miles <= stationZoneMiles)
     .sort((a, b) => a.miles - b.miles || a.candidate.id.localeCompare(b.candidate.id));
   if (!candidates.length) {
-    if (targetKind === 'a-tree') return undefined;
     const label = spec?.label ?? (targetKind === 'park' ? 'qualifying mapped park' : 'mapped rail station');
     return { unavailableReason: `no ${label} exists in this hiding zone` };
   }
-  const source = targetKind === 'park' || targetKind === 'a-tree' ? 'outdoor' : 'any';
+  const source = targetKind === 'park' || targetKind === 'a-tree' || targetKind === 'restaurant-interior' ? 'outdoor' : 'any';
   for (const { candidate } of candidates) {
     let panorama: Awaited<ReturnType<typeof panoramaAt>>;
     try {
@@ -342,6 +346,7 @@ export async function photoTargetInZone(
       panorama = null;
     }
     if (!panorama) continue;
+    if (avoid && (panorama.id === avoid.panoramaId || distanceMeters(panorama.position, avoid.position) < ZONE_PHOTO_SEPARATION_METERS)) continue;
     const panoramaMiles = turf.distance(
       [station.lng, station.lat],
       [panorama.position.lng, panorama.position.lat],
@@ -353,6 +358,7 @@ export async function photoTargetInZone(
       [candidate.position.lng, candidate.position.lat],
       { units: 'kilometers' },
     ) * 1000;
+    if (targetMeters > 50) continue;
     return {
       name: candidate.name,
       panorama,
@@ -363,9 +369,8 @@ export async function photoTargetInZone(
       displayText: targetDisplayText(targetKind),
     };
   }
-  if (targetKind === 'a-tree') return undefined;
   const label = spec?.label ?? (targetKind === 'park' ? 'mapped parks' : 'mapped rail stations');
-  return { unavailableReason: `${label} exist in this hiding zone, but none has usable Street View inside the zone` };
+  return { unavailableReason: `${label} exist in this hiding zone, but none has usable Street View elsewhere inside the zone` };
 }
 
 export async function panoramasInZone(station: Position, stationZoneMiles = 0.25) {

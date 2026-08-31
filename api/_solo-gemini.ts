@@ -1,6 +1,6 @@
 import { cardForInstance, type CardInstanceId } from '../src/cards';
 import type { Constraint, Position } from '../src/types';
-import { enforceKeepPriorities, GEMINI_CALL_LIMIT, MAPS_CALL_LIMIT, fallbackKeep, fallbackPlay, legalPostAnswerCards, responseCardCanActAs } from './_solo-cards';
+import { duplicatePostAnswerTarget, enforceKeepPriorities, enforceSoloHandLimit, GEMINI_CALL_LIMIT, MAPS_CALL_LIMIT, fallbackKeep, fallbackPlay, legalPostAnswerCards, moveTiming, preferredMovePlay, preferredPostAnswerCard, preferredResponseCard, responseCardCanActAs } from './_solo-cards';
 import type { SecretSoloSession } from './_solo-session';
 
 declare const process: { env: Record<string, string | undefined> };
@@ -37,9 +37,13 @@ function fallback(
   fallbackReason?: GeminiFallbackReason,
   fallbackDetail?: string,
 ): StrategyChoice {
+  const keeps = groups.map((group) => fallbackKeep(group.drawn, group.keep, session.questionNumber ?? 0));
+  const afterKeep = structuredClone(session);
+  afterKeep.deck.hand.push(...keeps.flat());
+  enforceSoloHandLimit(afterKeep);
   return {
-    keeps: groups.map((group) => fallbackKeep(group.drawn, group.keep, session.questionNumber ?? 0)),
-    playCard: fallbackPlay(session),
+    keeps,
+    playCard: fallbackPlay(afterKeep),
     source: 'fallback',
     fallbackReason,
     fallbackDetail,
@@ -61,11 +65,11 @@ function fallbackResponse(
   const early = (session.questionNumber ?? 0) <= 8;
   const threshold = early ? 55 : 10;
   if (stableStrategyRoll(session, 'response') >= threshold) return { action: 'answer', fallbackReason, fallbackDetail };
-  const randomize = responseCards.find((instance) => responseCardCanActAs(session, instance, 'randomize'));
+  const randomize = preferredResponseCard(session, responseCards, 'randomize');
   if (randomize && replacementCount > 0) {
     return { action: 'randomize', card: randomize, fallbackReason, fallbackDetail };
   }
-  const veto = responseCards.find((instance) => responseCardCanActAs(session, instance, 'veto'));
+  const veto = preferredResponseCard(session, responseCards, 'veto');
   return veto ? { action: 'veto', card: veto, fallbackReason, fallbackDetail } : { action: 'answer', fallbackReason, fallbackDetail };
 }
 
@@ -181,19 +185,24 @@ export async function chooseCardStrategy(
   const context = trimContext({
     phase: session.phase,
     questionNumber: session.questionNumber,
+    moveTiming: moveTiming(session),
     currentQuestion: { name: constraint.name, kind: constraint.kind, category: constraint.category },
     hider: { position: session.spot, zoneStation: session.station.name },
     seeker: session.lastSeekerPosition ? { position: session.lastSeekerPosition, freshnessQuestions: (session.questionNumber ?? 0) - (session.lastSeekerQuestionNumber ?? 0), transitRoute: session.lastTransitRoute } : null,
     hand: session.deck.hand.map((instance) => ({ instance, ...cardForInstance(instance) })),
     drawGroups: groups.map((group) => ({ keep: group.keep, cards: group.drawn.map((instance) => ({ instance, ...cardForInstance(instance) })) })),
     legalPlayCards: legalPlay,
+    duplicateTargets: legalPlay.flatMap((instance) => {
+      const target = duplicatePostAnswerTarget(potentialSession, instance);
+      return target ? [{ instance, copies: target }] : [];
+    }),
     activeEffects: session.activeEffects?.map(({ cardId, status, blocksQuestions, blocksTransit }) => ({ cardId, status, blocksQuestions, blocksTransit })),
     decisionHistory: session.recentDecisions,
     recentQuestions,
     strategyRoll: crypto.getRandomValues(new Uint32Array(1))[0] % 100,
   });
   const prompt = JSON.stringify({
-    instruction: 'Choose which newly drawn cards to keep and optionally one legal card to play. A newly drawn card may be played immediately only if you also keep that exact card. The strict keep priority begins Move first, Randomize second, and Veto third; these three outrank every time bonus and other card. After them, prefer 12- and 8-minute bonuses. During questions 1–8, actively take and spend useful non-curse power-ups instead of hoarding them. Prefer time bonuses over curses with uncertain casting conditions. Later, retain useful endgame cards and premium time bonuses. Use strategyRoll to avoid predictable play. Return only schema-valid JSON. Never invent card ids.',
+    instruction: 'Choose which newly drawn cards to keep and optionally one ordinary card to play. Duplicate is playable at any time and does not count toward the one-card-per-question limit. The server may use free Duplicate plays before or after the selected ordinary card, rechecking the hand after every play. A newly drawn card may be played immediately only if you also keep that exact card. The strict keep priority begins Move first, Randomize second, and Veto third; these three outrank every time bonus and other card. Keeping Move is different from playing it: the server holds it until moveTiming.ready (eight questions since the last relocation, before endgame), then gives Move priority over other ordinary plays. Never try to bypass this with Duplicate. After them, prefer 12- and 8-minute bonuses. Duplicate outranks 2-, 4-, and 6-minute bonuses. All AI-playable curses without aiAwkwardReason share the same keep priority, including Drained Brain and curses marked uncertainCasting: keep them ahead of 2-, 4-, and 6-minute bonuses, but below 8 and 12 minutes. A casting condition or confirmation requirement alone is not a reason to downgrade a curse. Only explicit AI-handling limitations justify a lower tier; U-Turn has aiAwkwardReason because live transit direction, next-stop, and connection data are missing. A 2-minute bonus is low-value discard/casting-cost fodder. Drained Brain permanently disables three questions, but casting it discards the entire hand: retain it rather than spending a valuable hand carelessly. During questions 1–8, actively take and spend useful non-curse power-ups instead of hoarding them. Duplicate must copy a card still held; duplicateTargets describes its current post-answer target, which must also be kept. A Duplicate selection leaves the ordinary play allowance available. Prefer spending Duplicate before its source when useful, but preserve it for Veto/Randomize or a premium round-end time bonus instead of copying a weaker effect. Do not copy an already-active curse. Consider casting costs, phase, and uncertain conditions when comparing other cards. Use strategyRoll to avoid predictable play. Return only schema-valid JSON. Never invent card ids.',
     state: context,
   });
 
@@ -230,6 +239,15 @@ export async function chooseCardStrategy(
     let playCard = typeof parsed.playCard === 'string' ? parsed.playCard as CardInstanceId : undefined;
     if (playCard && !legalPlay.includes(playCard)) throw new Error('Gemini returned an illegal card play.');
     if (playCard && !session.deck.hand.includes(playCard) && !keeps.some((kept) => kept.includes(playCard!))) playCard = undefined;
+    const afterKeep = structuredClone(session);
+    afterKeep.deck.hand.push(...keeps.flat());
+    enforceSoloHandLimit(afterKeep);
+    if (playCard && !legalPostAnswerCards(afterKeep).includes(playCard)) playCard = undefined;
+    if (playCard && cardForInstance(playCard).id === 'duplicate' &&
+      duplicatePostAnswerTarget(afterKeep, playCard) !== duplicatePostAnswerTarget(potentialSession, playCard)) playCard = undefined;
+    if (playCard) playCard = preferredPostAnswerCard(afterKeep, playCard);
+    // Once search progress reaches the threshold, Move isn't left to model timing.
+    playCard = preferredMovePlay(afterKeep) ?? playCard;
     return { keeps, playCard, source: 'gemini' };
   } catch (error) {
     const detail = failureDetail('Card strategy', error);
@@ -247,6 +265,8 @@ export async function chooseResponseStrategy(
   const gemini = session.gemini;
   const apiKey = process.env.GEMINI_API_KEY;
   const builtIn = (reason?: GeminiFallbackReason, detail?: string) => fallbackResponse(session, responseCards, replacementCount, reason, detail);
+  // Save the ordinary play for Move instead of spending it on Veto/Randomize.
+  if (preferredMovePlay(session)) return { action: 'answer' };
   if (!responseCards.length) return { action: 'answer' };
   if (!gemini) return builtIn('unavailable', 'Response strategy: Gemini usage state is missing from the game session.');
   if (gemini.fallback) return builtIn(gemini.fallbackReason ?? 'call-limit', `Response strategy: persistent ${gemini.fallbackReason ?? 'call-limit'} fallback is active.`);
@@ -265,7 +285,9 @@ export async function chooseResponseStrategy(
   const vetoCards = responseCards.filter((instance) => responseCardCanActAs(session, instance, 'veto'));
   const randomizeCards = responseCards.filter((instance) => responseCardCanActAs(session, instance, 'randomize'));
   const prompt = JSON.stringify({
-    instruction: 'Decide whether to answer normally, veto, or randomize this question. During questions 1–8, lean strongly toward spending Veto or Randomize; prefer Randomize when both are legal. A listed Duplicate card legally copies a matching response card still in hand. The server, not you, chooses the random replacement. After question 8, use response cards sparingly. Use strategyRoll to avoid predictable timing. Return only schema-valid JSON.',
+    instruction: 'Decide whether to answer normally, veto, or randomize this question. During questions 1–8, lean strongly toward spending Veto or Randomize; prefer Randomize when both are legal. A listed Duplicate card legally copies a matching response card still in hand. Usually spend Duplicate before the original response card so the original remains available for another play; in the end game the server preserves Duplicate for a held premium time bonus instead. The server, not you, chooses the random replacement. After question 8, use response cards sparingly. Use strategyRoll to avoid predictable timing. Return only schema-valid JSON.',
+    phase: session.phase,
+    questionNumber: session.questionNumber,
     question: { kind: constraint.kind, name: constraint.name, category: constraint.category, distanceMiles: constraint.distanceMiles },
     legal: { answer: true, vetoCards, randomizeCards: replacementCount ? randomizeCards : [] },
     strategyRoll: crypto.getRandomValues(new Uint32Array(1))[0] % 100,
@@ -294,9 +316,9 @@ export async function chooseResponseStrategy(
     gemini.spentMicros += Math.ceil(measured.input * INPUT_MICROS_PER_TOKEN + measured.output * OUTPUT_MICROS_PER_TOKEN);
     const parsed = JSON.parse(responseText(body) ?? '') as { action?: unknown; card?: unknown };
     if (parsed.action === 'answer') return { action: 'answer' };
-    if (parsed.action === 'veto' && typeof parsed.card === 'string' && vetoCards.includes(parsed.card as CardInstanceId)) return { action: 'veto', card: parsed.card as CardInstanceId };
+    if (parsed.action === 'veto' && typeof parsed.card === 'string' && vetoCards.includes(parsed.card as CardInstanceId)) return { action: 'veto', card: preferredResponseCard(session, vetoCards, 'veto') };
     if (parsed.action === 'randomize' && typeof parsed.card === 'string' && randomizeCards.includes(parsed.card as CardInstanceId) && replacementCount > 0) {
-      return { action: 'randomize', card: parsed.card as CardInstanceId };
+      return { action: 'randomize', card: preferredResponseCard(session, randomizeCards, 'randomize') };
     }
     throw new Error('Gemini chose an illegal response action.');
   } catch (error) {
@@ -321,7 +343,8 @@ export async function groundedPlace(
   purpose: 'distant-cuisine' | 'mediocre-travel-agent',
   center: Position,
 ): Promise<GroundedPlace | undefined> {
-  const cached = session.groundedPlaces?.find((entry) => entry.purpose === purpose && meters(entry.center, center) <= 25);
+  const radiusMiles = purpose === 'distant-cuisine' ? session.stationZoneMiles : 0.25;
+  const cached = session.groundedPlaces?.find((entry) => entry.purpose === purpose && meters(entry.center, center) <= 25 && meters(entry.position, center) <= radiusMiles * 1609.344);
   if (cached) return { name: cached.name, position: cached.position, citationUrl: cached.citationUrl, country: cached.country };
   const gemini = session.gemini;
   const apiKey = process.env.GEMINI_API_KEY;
@@ -329,7 +352,7 @@ export async function groundedPlace(
     totalReserved(session) + MAP_RESERVATION_MICROS > GAME_BUDGET_MICROS) return undefined;
   try {
     const prompt = purpose === 'distant-cuisine'
-      ? 'Find one currently operating restaurant at or very near this point that explicitly serves cuisine from one specific foreign country. Return the restaurant, that country, exact Google Maps coordinates, and canonical Maps URL.'
+      ? `Find one currently operating restaurant within ${radiusMiles} miles of this point that explicitly serves cuisine from one specific foreign country. This is a reference restaurant, not a relocation of the hider. Return the restaurant, that country, exact Google Maps coordinates, and canonical Maps URL.`
       : 'Find one publicly accessible interesting place within 0.25 miles of this point. Return exact Google Maps coordinates and canonical Maps URL.';
     const input = `${prompt}\nCenter: ${center.lat},${center.lng}`;
     if (await countTokens(apiKey, input) > MAX_INPUT_TOKENS) return undefined;
@@ -363,7 +386,7 @@ export async function groundedPlace(
     if (typeof parsed.name !== 'string' || typeof parsed.lat !== 'number' || typeof parsed.lng !== 'number' ||
       !Number.isFinite(parsed.lat) || !Number.isFinite(parsed.lng) || parsed.lat < -90 || parsed.lat > 90 || parsed.lng < -180 || parsed.lng > 180) return undefined;
     const position = { lat: parsed.lat, lng: parsed.lng };
-    if (meters(center, position) > 0.25 * 1609.344) return undefined;
+    if (meters(center, position) > radiusMiles * 1609.344) return undefined;
     if (purpose === 'mediocre-travel-agent' && session.lastSeekerPosition &&
       meters(position, session.spot) <= meters(session.lastSeekerPosition, session.spot)) return undefined;
     if (purpose === 'distant-cuisine' && (typeof parsed.country !== 'string' || !parsed.country.trim())) return undefined;

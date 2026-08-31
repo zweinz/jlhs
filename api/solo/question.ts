@@ -4,16 +4,15 @@ import { solveHiderQuestion } from '../../src/hider';
 import { nearestPoi } from '../../src/geometry';
 import { QUESTION_DEFINITIONS, RULEBOOK_DISTANCE_CHOICES } from '../../src/questions';
 import { MEASURING_SUBJECTS, SF_MATCHING_SUBJECTS, selectableSubjects } from '../../src/rulebook';
-import { nearestStreetOrientation } from '../../src/rulebookGeometry';
-import { isHidingPositionAllowed } from '../../src/noHideZones';
-import { canonicalQuestionKey, cardsForQuestion, distanceMeters, keptCardsForQuestion, publicSoloDisplayText, soloPhotoPlan, SOLO_PHOTO_SUBJECTS, type AnySoloPhotoKind } from '../../src/solo';
+import { canonicalQuestionKey, cardsForQuestion, distanceMeters, keptCardsForQuestion, publicSoloDisplayText, SOLO_PHOTO_SUBJECTS, type AnySoloPhotoKind } from '../../src/solo';
 import type { Constraint, Position, QuestionKind } from '../../src/types';
-import { panoramaAt, photoTargetInZone } from '../_solo-google';
-import { jsonError, readJson, seal, unseal, type PhotoAsset, type SecretSoloSession, type StreetOrientationAsset } from '../_solo-session';
+import { jsonError, readJson, seal, unseal, type SecretSoloSession } from '../_solo-session';
 import { requireRunningSession, SoloPausedError } from '../_solo-clock';
 import { cardIdFromInstance } from '../../src/cards';
-import { chooseCardStrategy, chooseResponseStrategy, groundedPlace, type GeminiFallbackReason } from '../_solo-gemini';
-import { addDecision, advancePersistentEffects, effectiveCardIdForPlay, enforceSoloHandLimit, fallbackPlay, legalPostAnswerCards, legalResponseCards, playMoveCard, playPostAnswerCard, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardNames, publicCardState, questionIsBlocked, spottyMemoryCategoryLabel } from '../_solo-cards';
+import { chooseCardStrategy, chooseResponseStrategy, type GeminiFallbackReason } from '../_solo-gemini';
+import { addDecision, advancePersistentEffects, enforceSoloHandLimit, fallbackPlay, legalPostAnswerCards, legalResponseCards, playResponseCard, preferredEarlyPowerupPlay, prepareQuestionReward, publicCardNames, publicCardState, questionIsBlocked, spottyMemoryCategoryLabel } from '../_solo-cards';
+import { playSoloCards } from '../_solo-play';
+import { resolveSoloPhoto } from '../_solo-photos';
 
 export const config = { runtime: 'edge' };
 
@@ -96,6 +95,7 @@ export default async function handler(request: Request) {
     let geminiFallbackReason: GeminiFallbackReason | undefined;
     const geminiFallbackDetails: string[] = [];
     const announcements: string[] = [];
+    let normalCardAvailable = true;
     {
       if (questionIsBlocked(session)) return jsonError('Complete or resolve the active blocking curse before asking another question.', 409);
       if (session.blockedQuestionKeys?.includes(key)) return jsonError('Drained Brain has disabled this question for the rest of the run.', 409);
@@ -117,6 +117,10 @@ export default async function handler(request: Request) {
         session.xenoVetoes = (session.xenoVetoes ?? 0) + 1;
         session.questionUses[key] = (session.questionUses[key] ?? 0) + 1;
         session.recentQuestions = [...(session.recentQuestions ?? []), { name: constraint.name, answer: 'vetoed', kind: constraint.kind }].slice(-6);
+        announcements.push(vetoAnnouncement, ...await playSoloCards(session, {
+          selected: responseUsesDuplicate ? preferredEarlyPowerupPlay(session) ?? fallbackPlay(session) : undefined,
+          allowNormal: Boolean(responseUsesDuplicate),
+        }));
         advancePersistentEffects(session);
         const cardState = publicCardState(session);
         return Response.json({
@@ -124,7 +128,7 @@ export default async function handler(request: Request) {
           repetition: session.questionUses[key], cardsDrawn: 0, cardsKept: 0,
           totalCardsDrawn: session.cardsDrawn, totalCardsKept: session.cardsKept ?? 0,
           questionUses: session.questionUses, phase: session.phase,
-          playedCardAnnouncements: [vetoAnnouncement], geminiFallbackReason, geminiFallbackDetails, cardState,
+          playedCardAnnouncements: announcements, geminiFallbackReason, geminiFallbackDetails, cardState,
         }, { headers: { 'cache-control': 'no-store' } });
       }
       if (responseChoice.action === 'randomize' && responseChoice.card && replacements.length) {
@@ -133,6 +137,7 @@ export default async function handler(request: Request) {
           ? `Xeno played Randomize question${responseUsesDuplicate ? ' using Duplicate another card' : ''}: “${constraint.name}” was replaced with “${replacement.name}”.`
           : undefined;
         if (replacement && playResponseCard(session, responseChoice.card, 'randomize', announcement)) {
+          normalCardAvailable = Boolean(responseUsesDuplicate);
           session.randomizations = (session.randomizations ?? 0) + 1;
           announcements.push(announcement!);
           randomizedFrom = constraint.name;
@@ -159,77 +164,13 @@ export default async function handler(request: Request) {
 
     if (constraint.kind === 'photo-reference') {
       try {
-      const targetedPhoto = await photoTargetInZone(
-        constraint.category, session.station.position, session.wideHeading, session.stationZoneMiles,
-      );
-      const plan = soloPhotoPlan(
-        constraint.category as AnySoloPhotoKind,
-        session.spot,
-        session.station.position,
-        constraint.direction,
-        session.wideHeading,
-      );
-      let panorama = plan.source === 'station' ? session.stationPanorama : session.panorama;
-      if (plan.generatedAsset === 'street-orientation') {
-        const orientation = nearestStreetOrientation(session.spot);
-        if (orientation) {
-          const asset: StreetOrientationAsset = {
-            kind: 'solo-street-orientation', version: 1, expiresAt: session.expiresAt,
-            bearing: orientation.bearing,
-          };
-          photoUrl = `/api/solo/street-orientation?token=${encodeURIComponent(await seal(asset))}`;
-          displayText = plan.displayText;
-        } else {
-          displayText = 'I cannot answer: the bundled street snapshot has no orientation near this hiding location';
-          rewardEligible = false;
-        }
-      } else if (targetedPhoto?.panorama && targetedPhoto.heading !== undefined) {
-        const asset: PhotoAsset = {
-          kind: 'solo-photo', version: 1, expiresAt: session.expiresAt,
-          panoramaId: targetedPhoto.panorama.id,
-          heading: targetedPhoto.heading,
-          pitch: 0,
-          fov: constraint.category === 'a-tree' ? 75 : constraint.category === 'park' ? 90 : 100,
-        };
-        photoUrl = `/api/solo/photo?token=${encodeURIComponent(await seal(asset))}`;
-        displayText = targetedPhoto.displayText ?? plan.displayText;
-      } else if (targetedPhoto?.unavailableReason) {
-        displayText = `I cannot answer: ${targetedPhoto.unavailableReason}`;
-        photoUrl = undefined;
-        rewardEligible = false;
-      } else if (plan.staticAssetUrl) {
-        displayText = plan.displayText;
-        photoUrl = plan.staticAssetUrl;
-      } else if (plan.unavailableReason) {
-        displayText = plan.displayText;
-        photoUrl = undefined;
-        rewardEligible = plan.rewardEligible === true;
-      } else if (plan.source === 'station' && !panorama) {
-        const metadata = await panoramaAt(session.station.position);
-        if (metadata) {
-          panorama = { id: metadata.id, date: metadata.date };
-          session.stationPanorama = panorama;
-        }
-      }
-      if (!plan.staticAssetUrl && !plan.generatedAsset && !plan.unavailableReason && panorama) {
-        const asset: PhotoAsset = {
-          kind: 'solo-photo', version: 1, expiresAt: session.expiresAt,
-          panoramaId: panorama.id,
-          heading: plan.heading,
-          pitch: plan.pitch,
-          fov: plan.fov,
-        };
-        const assetToken = await seal(asset);
-        photoUrl = `/api/solo/photo?token=${encodeURIComponent(assetToken)}`;
-        displayText = plan.displayText;
-      } else if (!plan.staticAssetUrl && !plan.generatedAsset && !plan.unavailableReason) {
-        displayText = `I cannot answer: outdoor Street View is unavailable at the ${plan.source === 'station' ? 'central station' : 'hiding location'}`;
-        rewardEligible = false;
-      }
+        const result = await resolveSoloPhoto(session, constraint.category as AnySoloPhotoKind, constraint.direction);
+        displayText = result.displayText;
+        photoUrl = result.photoUrl;
+        rewardEligible = result.rewardEligible;
       } catch (error) {
         console.warn('[Solo photo unavailable]', error instanceof Error ? error.name : 'unknown');
         displayText = 'I cannot answer: the photo service is temporarily unavailable';
-        photoUrl = undefined;
         rewardEligible = false;
       }
       answer = 'yes';
@@ -300,63 +241,7 @@ export default async function handler(request: Request) {
         ? strategy.playCard
         : undefined;
       const selected = modelSelected ?? preferredEarlyPowerupPlay(session) ?? (strategy.source === 'fallback' ? fallbackPlay(session) : undefined);
-      if (selected) {
-        const playedId = effectiveCardIdForPlay(session, selected);
-        const result = playedId === 'move'
-          ? await playMoveCard(session, selected)
-          : playPostAnswerCard(session, selected);
-        if (result.announcement) announcements.push(result.announcement);
-        if (result.played && (playedId === 'distant-cuisine' || playedId === 'mediocre-travel-agent')) {
-          const center = playedId === 'distant-cuisine' ? session.station.position : session.lastSeekerPosition!;
-          const place = await groundedPlace(session, playedId, center);
-          const safePlace = place && (playedId !== 'distant-cuisine' || isHidingPositionAllowed(place.position)) ? place : undefined;
-          const distantPanorama = safePlace && playedId === 'distant-cuisine' ? await panoramaAt(safePlace.position) : undefined;
-          const effect = session.activeEffects?.find((candidate) => candidate.cardInstance === selected);
-          if (effect && safePlace && (playedId !== 'distant-cuisine' || (distantPanorama && isHidingPositionAllowed(distantPanorama.position)))) {
-            effect.placeName = safePlace.name;
-            effect.proposedPosition = safePlace.position;
-            effect.proposedPanorama = distantPanorama ? { id: distantPanorama.id, date: distantPanorama.date } : undefined;
-            effect.citationUrl = safePlace.citationUrl;
-            if (playedId === 'mediocre-travel-agent' && session.lastSeekerPosition) {
-              session.publicEvidence = [...(session.publicEvidence ?? []), {
-                id: effect.id,
-                kind: 'closer-to',
-                label: `${effect.name}: the destination is farther from Xeno than the seekers were`,
-                nearer: session.lastSeekerPosition,
-                farther: safePlace.position,
-                placeName: safePlace.name,
-                positionRevision: session.positionRevision ?? 0,
-              }];
-            }
-            effect.detail = playedId === 'distant-cuisine'
-              ? `Hider restaurant: ${safePlace.name}. Cuisine country: ${safePlace.country}. Seekers need a restaurant whose country is at least as far from San Francisco.`
-              : `Vacation destination: ${safePlace.name}. Stay at least five minutes, send three photos, and obtain a souvenir.`;
-          } else if (effect) {
-            session.activeEffects = session.activeEffects?.filter((candidate) => candidate.id !== effect.id);
-            session.deck.usedPile = session.deck.usedPile.filter((instance) => instance !== effect.cardInstance);
-            session.deck.discardPile.push(effect.cardInstance);
-            addDecision(session, `${effect.name} could not be grounded and was discarded; its curse cooldown remains.`);
-            announcements.push(`${effect.name} could not find a valid grounded destination and had no effect.`);
-          }
-        } else if (result.played && playedId === 'unguided-tourist') {
-          const effect = session.activeEffects?.find((candidate) => candidate.cardInstance === selected);
-          const panorama = session.lastSeekerPosition ? await panoramaAt(session.lastSeekerPosition) : null;
-          if (effect && panorama && distanceMeters(panorama.position, session.lastSeekerPosition!) <= 500 * 0.3048) {
-            const photoAsset: PhotoAsset = {
-              kind: 'solo-photo', version: 1, expiresAt: session.expiresAt,
-              panoramaId: panorama.id, heading: crypto.getRandomValues(new Uint16Array(1))[0] % 360, pitch: 0, fov: 120,
-            };
-            effect.imageUrl = `/api/solo/photo?token=${encodeURIComponent(await seal(photoAsset))}`;
-            effect.detail = 'This unzoomed, horizon-level outdoor Street View scene is within 500 feet of the latest submitted seeker position.';
-          } else if (effect) {
-            session.activeEffects = session.activeEffects?.filter((candidate) => candidate.id !== effect.id);
-            session.deck.usedPile = session.deck.usedPile.filter((candidate) => candidate !== effect.cardInstance);
-            session.deck.discardPile.push(effect.cardInstance);
-            addDecision(session, `${effect.name} could not obtain a qualifying nearby Street View scene and was discarded; its curse cooldown remains.`);
-            announcements.push(`${effect.name} could not obtain a qualifying nearby Street View scene and had no effect.`);
-          }
-        }
-      }
+      announcements.push(...await playSoloCards(session, { selected, allowNormal: normalCardAvailable }));
       session.cardsDrawn += cardsDrawn;
       session.cardsKept = (session.cardsKept ?? 0) + cardsKept;
       session.recentQuestions = [...(session.recentQuestions ?? []), { name: constraint.name, answer: displayText, kind: constraint.kind }].slice(-6);
