@@ -63,6 +63,7 @@ export type SecretSoloSession = {
     oldStation: { id: string; name: string; position: Position };
   }>;
   positionRevision?: number;
+  /** Full game history; the legacy field name is retained for saved sessions. */
   recentDecisions?: string[];
   recentQuestions?: Array<{ name: string; answer: string; kind: string }>;
   gemini?: GeminiUsageState;

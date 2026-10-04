@@ -197,7 +197,7 @@ export async function chooseCardStrategy(
       return target ? [{ instance, copies: target }] : [];
     }),
     activeEffects: session.activeEffects?.map(({ cardId, status, blocksQuestions, blocksTransit }) => ({ cardId, status, blocksQuestions, blocksTransit })),
-    decisionHistory: session.recentDecisions,
+    decisionHistory: session.recentDecisions?.slice(-20),
     recentQuestions,
     strategyRoll: crypto.getRandomValues(new Uint32Array(1))[0] % 100,
   });

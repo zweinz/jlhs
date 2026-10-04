@@ -183,7 +183,7 @@ export function publicCardState(session: SecretSoloSession): SoloPublicCardState
     playHistory: (session.recentDecisions ?? []).filter((decision) =>
       !decision.startsWith('[private] ') &&
       !/Xeno played (?:Duplicate another card as )?Discard [12], draw [23]\./i.test(decision),
-    ).slice(-20),
+    ),
     moves: session.publicMoves ?? [],
     positionRevision: session.positionRevision ?? 0,
     questionBlocked: effects.some((effect) => effect.blocksQuestions),
@@ -204,7 +204,7 @@ export function publicCardState(session: SecretSoloSession): SoloPublicCardState
 }
 
 export function addDecision(session: SecretSoloSession, decision: string) {
-  session.recentDecisions = [...(session.recentDecisions ?? []), decision].slice(-20);
+  session.recentDecisions = [...(session.recentDecisions ?? []), decision];
 }
 
 export function questionIsBlocked(session: SecretSoloSession) {

@@ -30,7 +30,7 @@ import { primaryTransitStationIds, validStations } from './transit';
 import { isHidingPositionAllowed } from './noHideZones';
 import { createDeck } from './cards';
 import type { SharedState } from './types';
-import { deterministicMazeSvg, playPostAnswerCard, publicCardState } from '../api/_solo-cards';
+import { addDecision, deterministicMazeSvg, playPostAnswerCard, publicCardState } from '../api/_solo-cards';
 import { pois } from './data';
 import { solveHiderQuestion } from './hider';
 
@@ -396,6 +396,24 @@ describe('Solo token and card-session security', () => {
     stationPanorama: { id: 'station-pano', date: '2026-01' },
     route: { durationSeconds: 1200, distanceMeters: 4000, departureTime: '2026-08-24T19:00:00.000Z', arrivalTime: '2026-08-24T19:20:00.000Z', summary: ['Walk', 'N', 'Walk'] },
     deck: createDeck(() => 0.5), questionNumber: 0, activeEffects: [], blockedQuestionKeys: [], recentDecisions: [], publicMoves: [],
+  });
+
+  it('preserves the full public card review across saved sessions beyond 20 events', async () => {
+    let value = session();
+    const history: string[] = [];
+    for (let question = 1; question <= 30; question += 1) {
+      const events = [
+        `Question ${question}: drew 2-minute time bonus; kept 2-minute time bonus; discarded nothing.`,
+        'Spotty Memory now disables Radar questions.',
+      ];
+      history.push(...events);
+      events.forEach((event) => addDecision(value, event));
+      addDecision(value, '[private] Hidden hand-management decision.');
+      value = await unseal<SecretSoloSession>(await seal(value), 'solo-session');
+    }
+    value.phase = 'found';
+    expect(value.recentDecisions).toHaveLength(90);
+    expect(publicCardState(value).playHistory).toEqual(history);
   });
 
   it('round trips encrypted sessions and rejects tampering', async () => {
